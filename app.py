@@ -209,7 +209,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
         tcPr = cell._tc.get_or_add_tcPr()
         tcPr.append(parse_xml(f'<w:shd {nsdecls("w")} w:fill="{fill_hex}"/>'))
 
-    # 1. Encabezado (Nombre de la hoja como título)
+    # 1. Encabezado
     p_title = doc.add_paragraph()
     add_run_verdana(p_title, nombre_hoja.upper(), bold=True, size_pt=12, color_rgb=RGBColor(0, 51, 102))
 
@@ -293,7 +293,6 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
         neg_df = sub_df[sub_df["sentimiento_ia"] == "NEGATIVA"]
 
         if es_redes_sociales:
-            # En redes sociales NO se divide por subredes
             if len(pos_df) > 0:
                 p_m = doc.add_paragraph()
                 p_m.paragraph_format.space_before = Pt(4)
@@ -322,7 +321,6 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                         add_run_verdana(p_l, link, bold=False, size_pt=9, color_rgb=RGBColor(0, 102, 204), underline=True)
 
         else:
-            # En medios tradicionales SE DIVIDE por Tipo de Medio / Nota
             if len(pos_df) > 0:
                 for m_type, grupo_m in pos_df.groupby(lambda i: obtener_campo(pos_df.loc[i], ["Tipo de Nota", "Tipo de Medio", "Fuente"]) or "PORTALES DIGITALES"):
                     p_m = doc.add_paragraph()
@@ -419,7 +417,8 @@ if uploaded_file:
                 with st.spinner("Analizando publicaciones con IA..."):
                     df_h = dict_hojas[hoja_sel]
                     
-                    # Si tiene columna Menu usarla; de lo contrario el nombre de la hoja
+                    if 'Menu' in df_h.columns and lenhojas[hoja_sel]
+                    
                     if 'Menu' in df_h.columns and len(df_h['Menu'].dropna()) > 0:
                         nombre_h = str(df_h['Menu'].dropna().iloc[0]).strip()
                     else:
@@ -439,7 +438,6 @@ if uploaded_file:
 
         else:
             if st.button("Generar y Descargar TODAS las Hojas en .ZIP", type="primary"):
-                with st.spinner("Generando reportes individualesAS las Hojas en .ZIP", type="primary"):
                 with st.spinner("Generando reportes individuales para todas las hojas con IA..."):
                     zip_buffer = io.BytesIO()
                     cnt_generados = 0
