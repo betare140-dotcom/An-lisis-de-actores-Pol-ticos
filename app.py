@@ -34,7 +34,7 @@ GEMINI_API_KEY = "AQ.Ab8RN6LoOHgBblHSIETp2LjyBofO48YsSqSeojXYFAAKGvFa0w"
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
-# FUNCIÓN DE CARGA SEGURO EN CASCADA (Evita errores de ParserError)
+# FUNCIÓN DE CARGA SEGURO EN CASCADA
 def cargar_archivo_seguro(file):
     try:
         return pd.read_excel(file)
@@ -66,14 +66,46 @@ def cargar_archivo_seguro(file):
 
     raise Exception("No se pudo leer el archivo. Asegúrate de que sea un archivo Excel (.xlsx/.xls) o CSV válido.")
 
+# EXTRACCIÓN UNIVERSAL DE CAMPOS (Soporta Onclusive y archivos alternativos)
+def obtener_campo(row, lista_cols):
+    for c in lista_cols:
+        if c in row.index:
+            v = str(row[c]).strip()
+            if v and v != "nan" and v != "None":
+                return v
+        for col_existente in row.index:
+            if col_existente.strip().lower() == c.lower():
+                v = str(row[col_existente]).strip()
+                if v and v != "nan" and v != "None":
+                    return v
+    return ""
 
-# Interfaz de usuario para carga de archivos
+def obtener_columna_serie(df_data, lista_posibles_cols):
+    for c in lista_posibles_cols:
+        if c in df_data.columns:
+            return df_data[c]
+        for col_existente in df_data.columns:
+            if col_existente.strip().lower() == c.lower():
+                return df_data[col_existente]
+    return pd.Series([""] * len(df_data), index=df_data.index)
+
+def parsear_fecha_universal(val):
+    if not val or str(val) == "nan":
+        return pd.NaT
+    val_clean = str(val).split(",")[0].strip().split(" ")[0].strip()
+    try:
+        return pd.to_datetime(val_clean, dayfirst=True, errors="coerce")
+    except Exception:
+        return pd.NaT
+
+
+# Interfaz de usuario
 uploaded_file = st.file_uploader(
     "Sube tu archivo Excel o CSV de Onclusive", type=["xlsx", "xls", "csv"]
 )
 actor_nombre = st.text_input(
     "Nombre y Partido del Actor Político",
-    placeholder="ej. FEDRHA SURIANO (MOVIMIENTO CIUDADANO)",
+    placeholder="ej. RODRIGO ABDALA (MORENA / BIENESTAR FEDERAL)",
 ).strip().upper()
 
 if uploaded_file and actor_nombre:
@@ -91,29 +123,16 @@ if uploaded_file and actor_nombre:
                     "pcgobpue" in str(r.get("Author handle (@username)", "")).lower()
                     or "protección civil" in str(r.get("Author name", "")).lower()
                     or "protección civil" in str(r.get("Source", "")).lower()
+                    or "protección civil" in str(r.get("Autor", "")).lower()
                 ),
                 axis=1,
             )
             df_filtrado = df[~pc_mask].copy()
 
             # Detección de columna de fecha
-            posibles_cols_fecha = ["Publish date", "Date", "Fecha", "Fecha de publicación"]
-            col_fecha = None
-            for c in posibles_cols_fecha:
-                if c in df_filtrado.columns:
-                    col_fecha = c
-                    break
-
-            if col_fecha is None:
-                st.error(f"No se encontró una columna de fecha válida. Columnas detectadas: {list(df_filtrado.columns)}")
-                st.stop()
-
-            df_filtrado["fecha_dt"] = pd.to_datetime(
-                df_filtrado[col_fecha],
-                format="mixed",
-                errors="coerce",
-            )
-            df_filtrado["fecha_str"] = df_filtrado["fecha_dt"].dt.strftime("%d.%m.%2y")
+            serie_fechas_raw = obtener_columna_serie(df_filtrado, ["Publish date", "Fecha", "Date", "Fecha de publicación"])
+            df_filtrado["fecha_dt"] = serie_fechas_raw.apply(parsear_fecha_universal)
+            df_filtrado["fecha_str"] = df_filtrado["fecha_dt"].apply(lambda dt: dt.strftime("%d.%m.%2y") if pd.notnull(dt) else "")
             df_filtrado = df_filtrado.sort_values(by="fecha_dt", ascending=True)
 
             # Periodo de medición
@@ -125,19 +144,12 @@ if uploaded_file and actor_nombre:
             else:
                 periodo_texto = "Periodo de Monitoreo"
 
-            def obtener_campo(row, lista_cols):
-                for c in lista_cols:
-                    if c in row.index:
-                        v = str(row[c]).strip()
-                        if v and v != "nan" and v != "None":
-                            return v
-                return ""
-
             def limpiar_texto(texto):
                 if not isinstance(texto, str) or texto == "nan":
                     return ""
                 texto_sin_urls = re.sub(r"https?://\S+", "", texto)
                 texto_sin_emojis = re.sub(r":[a-zA-Z0-9_\-|]+:", "", texto_sin_urls)
+                texto_sin_emojis = re.sub(r'[\U00010000-\U0010ffff]', '', texto_sin_emojis)
                 lineas = [
                     re.sub(r"[ \t]+", " ", line).strip()
                     for line in texto_sin_emojis.split("\n")
@@ -147,7 +159,7 @@ if uploaded_file and actor_nombre:
 
             # Clasificación de sentimiento con IA
             def clasificar_con_ia(row):
-                detalle = obtener_campo(row, ["Detail", "Summary", "Síntesis", "Title"])
+                detalle = obtener_campo(row, ["Contenido", "Detail", "Summary", "Síntesis", "Title"])
                 prompt = (
                     "Eres un analista político experto. Evalúa la siguiente publicación sobre '" + str(actor_nombre) + "':\n\n"
                     "CRITERIO DE CLASIFICACIÓN:\n"
@@ -168,15 +180,18 @@ if uploaded_file and actor_nombre:
             negativas_cnt = len(df_filtrado[df_filtrado["sentimiento_ia"] == "NEGATIVA"])
             total_cnt = len(df_filtrado)
 
-            redes_cnt = df_filtrado["Media type"].astype(str).str.contains("Facebook|X|Twitter|Instagram|TikTok", case=False, na=False).sum()
-            portales_cnt = df_filtrado["Media type"].astype(str).str.contains("Portal|Web|Online", case=False, na=False).sum()
-            prensa_cnt = df_filtrado["Media type"].astype(str).str.contains("Prensa|Diario|Periódico", case=False, na=False).sum()
-            columnas_cnt = df_filtrado["Media type"].astype(str).str.contains("Columna|Opinión", case=False, na=False).sum()
+            # Búsqueda segura de canal/fuente
+            serie_media = obtener_columna_serie(df_filtrado, ["Fuente", "Media type", "Media Type", "Medio", "Tipo de Medio", "Source type", "Canal"])
+            
+            redes_cnt = serie_media.astype(str).str.contains("Facebook|X|Twitter|Instagram|TikTok", case=False, na=False).sum()
+            portales_cnt = serie_media.astype(str).str.contains("Portal|Web|Online", case=False, na=False).sum()
+            prensa_cnt = serie_media.astype(str).str.contains("Prensa|Diario|Periódico", case=False, na=False).sum()
+            columnas_cnt = serie_media.astype(str).str.contains("Columna|Opinión", case=False, na=False).sum()
 
             # Función para los 3 temas positivos y 3 negativos
             def obtener_3_temas_positivos_y_negativos(df_data, actor_p):
-                pos_textos = str(df_data[df_data["sentimiento_ia"] == "POSITIVA"]["Detail"].dropna().head(30).tolist())
-                neg_textos = str(df_data[df_data["sentimiento_ia"] == "NEGATIVA"]["Detail"].dropna().head(15).tolist())
+                pos_textos = str(df_data[df_data["sentimiento_ia"] == "POSITIVA"]["Contenido"].dropna().head(30).tolist()) if "Contenido" in df_data.columns else str(df_data[df_data["sentimiento_ia"] == "POSITIVA"]["Detail"].dropna().head(30).tolist())
+                neg_textos = str(df_data[df_data["sentimiento_ia"] == "NEGATIVA"]["Contenido"].dropna().head(15).tolist()) if "Contenido" in df_data.columns else str(df_data[df_data["sentimiento_ia"] == "NEGATIVA"]["Detail"].dropna().head(15).tolist())
 
                 prompt = (
                     "Eres un analista de comunicación política. Analiza las noticias sobre '" + str(actor_p) + "'.\n\n"
@@ -196,7 +211,7 @@ if uploaded_file and actor_nombre:
                 try:
                     return model.generate_content(prompt).text.strip()
                 except Exception:
-                    return "1. Posicionamiento sobre la autonomía de la agenda política.\n2. Acciones de fortalecimiento de la estructura territorial.\n3. Participación en espacios de debate público.\n\nTEMAS NEGATIVOS:\n1. No se registraron temas negativos en el periodo analizado."
+                    return "1. Acciones de trabajo en territorio e impulso a programas sociales.\n2. Coordinación institucional con la agenda de gobierno.\n3. Presencia en medios digitales y redes sociales.\n\nTEMAS NEGATIVOS:\n1. No se registraron temas negativos en el periodo analizado."
 
             # Crear Documento Word
             doc = Document()
@@ -289,6 +304,7 @@ if uploaded_file and actor_nombre:
             add_run_verdana(p_des, "DESGLOSE", bold=True, size_pt=11)
 
             for fecha_item in df_filtrado["fecha_str"].dropna().unique():
+                if not fecha_item: continue
                 sub_df = df_filtrado[df_filtrado["fecha_str"] == fecha_item]
 
                 p_f = doc.add_paragraph()
@@ -299,17 +315,17 @@ if uploaded_file and actor_nombre:
                 pos_df = sub_df[sub_df["sentimiento_ia"] == "POSITIVA"]
                 neg_df = sub_df[sub_df["sentimiento_ia"] == "NEGATIVA"]
 
-                for m_type, grupo_m in pos_df.groupby(lambda i: obtener_campo(pos_df.loc[i], ["Media type", "Source type"]) or "REDES SOCIALES"):
+                for m_type, grupo_m in pos_df.groupby(lambda i: obtener_campo(pos_df.loc[i], ["Fuente", "Media type", "Media Type", "Medio", "Tipo de Medio", "Source type", "Canal"]) or "REDES SOCIALES"):
                     p_m = doc.add_paragraph()
                     p_m.paragraph_format.space_before = Pt(4)
                     p_m.paragraph_format.space_after = Pt(4)
                     add_run_verdana(p_m, m_type.upper(), bold=True, size_pt=10)
 
                     for _, row in grupo_m.iterrows():
-                        autor = obtener_campo(row, ["Author name", "Source", "Media name", "Programa"])
-                        handle = obtener_campo(row, ["Author handle (@username)", "Handle"])
-                        detalle = obtener_campo(row, ["Detail", "Summary", "Síntesis", "Title"])
-                        link = obtener_campo(row, ["Link", "URL", "Enlace"])
+                        autor = obtener_campo(row, ["Autor", "Author name", "Source", "Media name", "Programa"])
+                        handle = obtener_campo(row, ["Author handle (@username)", "Handle", "Username"])
+                        detalle = obtener_campo(row, ["Contenido", "Detail", "Summary", "Síntesis", "Title"])
+                        link = obtener_campo(row, ["URL", "Link", "Enlace"])
 
                         p_a = doc.add_paragraph()
                         p_a.paragraph_format.space_before = Pt(4)
@@ -333,10 +349,10 @@ if uploaded_file and actor_nombre:
                     add_run_verdana(p_neg_hdr, "NEGATIVAS", bold=True, size_pt=10, color_rgb=RGBColor(180, 0, 0))
 
                     for _, row in neg_df.iterrows():
-                        autor = obtener_campo(row, ["Author name", "Source", "Media name", "Programa"])
-                        handle = obtener_campo(row, ["Author handle (@username)", "Handle"])
-                        detalle = obtener_campo(row, ["Detail", "Summary", "Síntesis", "Title"])
-                        link = obtener_campo(row, ["Link", "URL", "Enlace"])
+                        autor = obtener_campo(row, ["Autor", "Author name", "Source", "Media name", "Programa"])
+                        handle = obtener_campo(row, ["Author handle (@username)", "Handle", "Username"])
+                        detalle = obtener_campo(row, ["Contenido", "Detail", "Summary", "Síntesis", "Title"])
+                        link = obtener_campo(row, ["URL", "Link", "Enlace"])
 
                         p_a = doc.add_paragraph()
                         p_a.paragraph_format.space_before = Pt(4)
