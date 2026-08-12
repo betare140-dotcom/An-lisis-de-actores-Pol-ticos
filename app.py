@@ -23,7 +23,7 @@ st.write(
     " clasificación de IA."
 )
 
-# Configuración de la API Key (puedes mantenerla fija o traerla de los secretos de Streamlit)
+# Configuración de la API Key
 GEMINI_API_KEY = "AQ.Ab8RN6LoOHgBblHSIETp2LjyBofO48YsSqSeojXYFAAKGvFa0w"
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
@@ -57,12 +57,30 @@ if uploaded_file and actor_nombre:
       )
       df_filtrado = df[~pc_mask].copy()
 
-      # Ordenar por fecha
-      col_fecha = (
-          "Publish date" if "Publish date" in df_filtrado.columns else "Date"
-      )
+      # Detección automática de la columna de fecha (soporta inglés y español)
+      posibles_cols_fecha = [
+          "Publish date",
+          "Date",
+          "Fecha",
+          "Fecha de publicación",
+      ]
+      col_fecha = None
+      for c in posibles_cols_fecha:
+        if c in df_filtrado.columns:
+          col_fecha = c
+          break
+
+      if col_fecha is None:
+        st.error(
+            "No se encontró una columna de fecha válida en el archivo. Las"
+            f" columnas detectadas son: {list(df_filtrado.columns)}"
+        )
+        st.stop()
+
       df_filtrado["fecha_dt"] = pd.to_datetime(
-          df_filtrado[col_fecha], format="%d/%m/%Y %H:%M:%S", errors="coerce"
+          df_filtrado[col_fecha],
+          format="mixed",
+          errors="coerce",
       )
       df_filtrado["fecha_str"] = df_filtrado["fecha_dt"].dt.strftime("%d.%m.%2y")
       df_filtrado = df_filtrado.sort_values(by="fecha_dt", ascending=True)
