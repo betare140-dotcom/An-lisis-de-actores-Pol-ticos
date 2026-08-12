@@ -34,6 +34,39 @@ GEMINI_API_KEY = "AQ.Ab8RN6LoOHgBblHSIETp2LjyBofO48YsSqSeojXYFAAKGvFa0w"
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
+# FUNCIÓN DE CARGA SEGURO EN CASCADA (Evita errores de ParserError)
+def cargar_archivo_seguro(file):
+    try:
+        return pd.read_excel(file)
+    except Exception:
+        pass
+
+    try:
+        return pd.read_excel(file, engine="xlrd")
+    except Exception:
+        pass
+
+    try:
+        file.seek(0)
+        return pd.read_csv(file, on_bad_lines="skip")
+    except Exception:
+        pass
+
+    try:
+        file.seek(0)
+        return pd.read_csv(file, encoding="latin1", on_bad_lines="skip")
+    except Exception:
+        pass
+
+    try:
+        file.seek(0)
+        return pd.read_csv(file, sep=";", encoding="latin1", on_bad_lines="skip")
+    except Exception:
+        pass
+
+    raise Exception("No se pudo leer el archivo. Asegúrate de que sea un archivo Excel (.xlsx/.xls) o CSV válido.")
+
+
 # Interfaz de usuario para carga de archivos
 uploaded_file = st.file_uploader(
     "Sube tu archivo Excel o CSV de Onclusive", type=["xlsx", "xls", "csv"]
@@ -46,13 +79,11 @@ actor_nombre = st.text_input(
 if uploaded_file and actor_nombre:
     if st.button("Generar Reporte Oficial", type="primary"):
         with st.spinner("Analizando publicaciones con Inteligencia Artificial..."):
-            # Leer archivo según extensión
-            if uploaded_file.name.endswith(".csv"):
-                df = pd.read_csv(uploaded_file)
-            elif uploaded_file.name.endswith(".xls"):
-                df = pd.read_excel(uploaded_file, engine="xlrd")
-            else:
-                df = pd.read_excel(uploaded_file)
+            try:
+                df = cargar_archivo_seguro(uploaded_file)
+            except Exception as e:
+                st.error(str(e))
+                st.stop()
 
             # Filtrar Protección Civil
             pc_mask = df.apply(
@@ -82,7 +113,6 @@ if uploaded_file and actor_nombre:
                 format="mixed",
                 errors="coerce",
             )
-            # Formato Día.Mes.Año (07.08.26)
             df_filtrado["fecha_str"] = df_filtrado["fecha_dt"].dt.strftime("%d.%m.%2y")
             df_filtrado = df_filtrado.sort_values(by="fecha_dt", ascending=True)
 
@@ -115,7 +145,7 @@ if uploaded_file and actor_nombre:
                 ]
                 return "\n".join(lineas)
 
-            # Clasificación de sentimiento
+            # Clasificación de sentimiento con IA
             def clasificar_con_ia(row):
                 detalle = obtener_campo(row, ["Detail", "Summary", "Síntesis", "Title"])
                 prompt = (
@@ -232,7 +262,7 @@ if uploaded_file and actor_nombre:
             p_tot.paragraph_format.space_after = Pt(10)
             add_run_verdana(p_tot, f"TOTAL NOTAS INFORMATIVAS: {total_cnt}\nREDES SOCIALES: {redes_cnt}\nPORTALES DIGITALES: {portales_cnt}\nPRENSA LOCAL: {prensa_cnt}\nCOLUMNAS: {columnas_cnt}", bold=True, size_pt=10)
 
-            # 3. Resumen (Estrictamente 3 temas positivos y 3 negativos)
+            # 3. Resumen
             p_res = doc.add_paragraph()
             p_res.paragraph_format.space_before = Pt(10)
             add_run_verdana(p_res, "RESUMEN", bold=True, size_pt=11)
