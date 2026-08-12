@@ -1,9 +1,3 @@
-Aquí tienes el código completo y actualizado para tu aplicación en **Streamlit**.
-
-Se han separado los dos comportamientos:
-
-1. **Redes Sociales:** Te sigue pidiendo el nombre del actor político y procesa el archivo de redes.
-2. **Medios Tradicionales:** **Ya no te pide el nombre del candidato**. Lee automáticamente todas las pestañas (hojas) del archivo de Excel, procesa a cada candidato de forma individual generando su reporte oficial en Word, y **empaqueta todos los reportes en un solo archivo ZIP** listo para descargarse con un solo clic.
 
 ### Código completo para `app.py`
 
