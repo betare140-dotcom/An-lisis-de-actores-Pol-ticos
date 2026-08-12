@@ -1,5 +1,3 @@
-
-### Código completo para `app.py`
 import io
 import os
 import re
@@ -774,5 +772,3 @@ else:
             file_name=zip_name,
             mime="application/zip",
         )
-
-```
