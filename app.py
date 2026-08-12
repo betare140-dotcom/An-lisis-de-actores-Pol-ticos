@@ -1,7 +1,5 @@
 
 ### Código completo para `app.py`
-
-```python
 import io
 import os
 import re
