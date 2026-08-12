@@ -28,9 +28,9 @@ GEMINI_API_KEY = "AQ.Ab8RN6LoOHgBblHSIETp2LjyBofO48YsSqSeojXYFAAKGvFa0w"
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
-# Interfaz de usuario para carga de archivos y textos
+# Interfaz de usuario para carga de archivos (con soporte para xlsx, xls y csv)
 uploaded_file = st.file_uploader(
-    "Sube tu archivo Excel o CSV de Onclusive", type=["xlsx", "csv"]
+    "Sube tu archivo Excel o CSV de Onclusive", type=["xlsx", "xls", "csv"]
 )
 actor_nombre = st.text_input(
     "Nombre y Partido del Actor Político",
@@ -40,9 +40,11 @@ actor_nombre = st.text_input(
 if uploaded_file and actor_nombre:
   if st.button("Generar Reporte Oficial", type="primary"):
     with st.spinner("Analizando publicaciones con Inteligencia Artificial..."):
-      # Leer archivo
+      # Leer archivo según su extensión
       if uploaded_file.name.endswith(".csv"):
         df = pd.read_csv(uploaded_file)
+      elif uploaded_file.name.endswith(".xls"):
+        df = pd.read_excel(uploaded_file, engine="xlrd")
       else:
         df = pd.read_excel(uploaded_file)
 
