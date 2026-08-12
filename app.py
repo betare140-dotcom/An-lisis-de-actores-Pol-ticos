@@ -25,11 +25,10 @@ st.set_page_config(
 
 st.title("📊 Generador de Monitoreo de Actores Políticos")
 st.write(
-    "Sube tu reporte de Onclusive para generar el informe oficial en Word con"
-    " clasificación de IA."
+    "Sube tu reporte para generar el informe oficial en Word con clasificación de IA."
 )
 
-# Configuración de la API Key
+# Configuración de la API Key de Gemini
 GEMINI_API_KEY = "AQ.Ab8RN6LoOHgBblHSIETp2LjyBofO48YsSqSeojXYFAAKGvFa0w"
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
@@ -66,7 +65,6 @@ def cargar_archivo_seguro(file):
 
     raise Exception("No se pudo leer el archivo. Asegúrate de que sea un archivo Excel (.xlsx/.xls) o CSV válido.")
 
-# EXTRACCIÓN UNIVERSAL DE CAMPOS (Soporta Onclusive y archivos alternativos)
 def obtener_campo(row, lista_cols):
     for c in lista_cols:
         if c in row.index:
@@ -98,14 +96,35 @@ def parsear_fecha_universal(val):
     except Exception:
         return pd.NaT
 
+def limpiar_texto(texto):
+    if not isinstance(texto, str) or texto == "nan":
+        return ""
+    texto_sin_urls = re.sub(r"https?://\S+", "", texto)
+    texto_sin_emojis = re.sub(r":[a-zA-Z0-9_\-|]+:", "", texto_sin_urls)
+    texto_sin_emojis = re.sub(r'[\U00010000-\U0010ffff]', '', texto_sin_emojis)
+    lineas = [
+        re.sub(r"[ \t]+", " ", line).strip()
+        for line in texto_sin_emojis.split("\n")
+        if line.strip()
+    ]
+    return "\n".join(lineas)
 
-# Interfaz de usuario
+
+# --- INTERFAZ DE USUARIO ---
+
+tipo_analisis = st.radio(
+    "¿Qué tipo de archivo vas a analizar?",
+    ["Redes Sociales", "Medios Tradicionales / Portales (Prensa, TV, Radio, Portales)"],
+    index=0
+)
+
 uploaded_file = st.file_uploader(
     "Sube tu archivo Excel o CSV de Onclusive", type=["xlsx", "xls", "csv"]
 )
+
 actor_nombre = st.text_input(
     "Nombre y Partido del Actor Político",
-    placeholder="ej. RODRIGO ABDALA (MORENA / BIENESTAR FEDERAL)",
+    placeholder="ej. FEDRHA SURIANO (MOVIMIENTO CIUDADANO)",
 ).strip().upper()
 
 if uploaded_file and actor_nombre:
@@ -144,19 +163,6 @@ if uploaded_file and actor_nombre:
             else:
                 periodo_texto = "Periodo de Monitoreo"
 
-            def limpiar_texto(texto):
-                if not isinstance(texto, str) or texto == "nan":
-                    return ""
-                texto_sin_urls = re.sub(r"https?://\S+", "", texto)
-                texto_sin_emojis = re.sub(r":[a-zA-Z0-9_\-|]+:", "", texto_sin_urls)
-                texto_sin_emojis = re.sub(r'[\U00010000-\U0010ffff]', '', texto_sin_emojis)
-                lineas = [
-                    re.sub(r"[ \t]+", " ", line).strip()
-                    for line in texto_sin_emojis.split("\n")
-                    if line.strip()
-                ]
-                return "\n".join(lineas)
-
             # Clasificación de sentimiento con IA
             def clasificar_con_ia(row):
                 detalle = obtener_campo(row, ["Contenido", "Detail", "Summary", "Síntesis", "Title"])
@@ -180,13 +186,12 @@ if uploaded_file and actor_nombre:
             negativas_cnt = len(df_filtrado[df_filtrado["sentimiento_ia"] == "NEGATIVA"])
             total_cnt = len(df_filtrado)
 
-            # Búsqueda segura de canal/fuente
             serie_media = obtener_columna_serie(df_filtrado, ["Fuente", "Media type", "Media Type", "Medio", "Tipo de Medio", "Source type", "Canal"])
             
-            redes_cnt = serie_media.astype(str).str.contains("Facebook|X|Twitter|Instagram|TikTok", case=False, na=False).sum()
-            portales_cnt = serie_media.astype(str).str.contains("Portal|Web|Online", case=False, na=False).sum()
-            prensa_cnt = serie_media.astype(str).str.contains("Prensa|Diario|Periódico", case=False, na=False).sum()
-            columnas_cnt = serie_media.astype(str).str.contains("Columna|Opinión", case=False, na=False).sum()
+            redes_cnt = serie_media.astype(str).str.contains("Facebook|X|Twitter|Instagram|TikTok", case=False, na=False).sum() if tipo_analisis == "Redes Sociales" else 0
+            portales_cnt = serie_media.astype(str).str.contains("Portal|Web|Online", case=False, na=False).sum() if tipo_analisis != "Redes Sociales" else 0
+            prensa_cnt = serie_media.astype(str).str.contains("Prensa|Diario|Periódico", case=False, na=False).sum() if tipo_analisis != "Redes Sociales" else 0
+            columnas_cnt = serie_media.astype(str).str.contains("Columna|Opinión", case=False, na=False).sum() if tipo_analisis != "Redes Sociales" else 0
 
             # Función para los 3 temas positivos y 3 negativos
             def obtener_3_temas_positivos_y_negativos(df_data, actor_p):
@@ -275,7 +280,13 @@ if uploaded_file and actor_nombre:
             p_tot = doc.add_paragraph()
             p_tot.paragraph_format.space_before = Pt(10)
             p_tot.paragraph_format.space_after = Pt(10)
-            add_run_verdana(p_tot, f"TOTAL NOTAS INFORMATIVAS: {total_cnt}\nREDES SOCIALES: {redes_cnt}\nPORTALES DIGITALES: {portales_cnt}\nPRENSA LOCAL: {prensa_cnt}\nCOLUMNAS: {columnas_cnt}", bold=True, size_pt=10)
+            
+            if tipo_analisis == "Redes Sociales":
+                texto_totales = f"TOTAL NOTAS INFORMATIVAS: {total_cnt}\nREDES SOCIALES: {total_cnt}\nPORTALES DIGITALES: 0\nPRENSA LOCAL: 0\nCOLUMNAS: 0"
+            else:
+                texto_totales = f"TOTAL NOTAS INFORMATIVAS: {total_cnt}\nREDES SOCIALES: 0\nPORTALES DIGITALES: {portales_cnt}\nPRENSA LOCAL: {prensa_cnt}\nCOLUMNAS: {columnas_cnt}"
+            
+            add_run_verdana(p_tot, texto_totales, bold=True, size_pt=10)
 
             # 3. Resumen
             p_res = doc.add_paragraph()
@@ -315,33 +326,64 @@ if uploaded_file and actor_nombre:
                 pos_df = sub_df[sub_df["sentimiento_ia"] == "POSITIVA"]
                 neg_df = sub_df[sub_df["sentimiento_ia"] == "NEGATIVA"]
 
-                for m_type, grupo_m in pos_df.groupby(lambda i: obtener_campo(pos_df.loc[i], ["Fuente", "Media type", "Media Type", "Medio", "Tipo de Medio", "Source type", "Canal"]) or "REDES SOCIALES"):
-                    p_m = doc.add_paragraph()
-                    p_m.paragraph_format.space_before = Pt(4)
-                    p_m.paragraph_format.space_after = Pt(4)
-                    add_run_verdana(p_m, m_type.upper(), bold=True, size_pt=10)
+                if tipo_analisis == "Redes Sociales":
+                    # Si es Redes Sociales, NO se divide por sub-redes; va directo como REDES SOCIALES
+                    if len(pos_df) > 0:
+                        p_m = doc.add_paragraph()
+                        p_m.paragraph_format.space_before = Pt(4)
+                        p_m.paragraph_format.space_after = Pt(4)
+                        add_run_verdana(p_m, "REDES SOCIALES", bold=True, size_pt=10)
 
-                    for _, row in grupo_m.iterrows():
-                        autor = obtener_campo(row, ["Autor", "Author name", "Source", "Media name", "Programa"])
-                        handle = obtener_campo(row, ["Author handle (@username)", "Handle", "Username"])
-                        detalle = obtener_campo(row, ["Contenido", "Detail", "Summary", "Síntesis", "Title"])
-                        link = obtener_campo(row, ["URL", "Link", "Enlace"])
+                        for _, row in pos_df.iterrows():
+                            autor = obtener_campo(row, ["Autor", "Author name", "Source", "Media name", "Programa"])
+                            handle = obtener_campo(row, ["Author handle (@username)", "Handle", "Username"])
+                            detalle = obtener_campo(row, ["Contenido", "Detail", "Summary", "Síntesis", "Title"])
+                            link = obtener_campo(row, ["URL", "Link", "Enlace"])
 
-                        p_a = doc.add_paragraph()
-                        p_a.paragraph_format.space_before = Pt(4)
-                        p_a.paragraph_format.space_after = Pt(1)
-                        if handle and not handle.startswith("@"): handle = f"@{handle}"
-                        add_run_verdana(p_a, f"{autor} {handle}".strip() if handle else autor, bold=True, size_pt=10)
+                            p_a = doc.add_paragraph()
+                            p_a.paragraph_format.space_before = Pt(4)
+                            p_a.paragraph_format.space_after = Pt(1)
+                            if handle and not handle.startswith("@"): handle = f"@{handle}"
+                            add_run_verdana(p_a, f"{autor} {handle}".strip() if handle else autor, bold=True, size_pt=10)
 
-                        p_d = doc.add_paragraph()
-                        p_d.paragraph_format.space_after = Pt(2)
-                        add_run_verdana(p_d, limpiar_texto(detalle), bold=False, size_pt=9.5)
+                            p_d = doc.add_paragraph()
+                            p_d.paragraph_format.space_after = Pt(2)
+                            add_run_verdana(p_d, limpiar_texto(detalle), bold=False, size_pt=9.5)
 
-                        if link:
-                            p_l = doc.add_paragraph()
-                            p_l.paragraph_format.space_after = Pt(6)
-                            add_run_verdana(p_l, link, bold=False, size_pt=9, color_rgb=RGBColor(0, 102, 204), underline=True)
+                            if link:
+                                p_l = doc.add_paragraph()
+                                p_l.paragraph_format.space_after = Pt(6)
+                                add_run_verdana(p_l, link, bold=False, size_pt=9, color_rgb=RGBColor(0, 102, 204), underline=True)
+                else:
+                    # Medios Tradicionales / Portales (dividir por Tipo de Medio)
+                    for m_type, grupo_m in pos_df.groupby(lambda i: obtener_campo(pos_df.loc[i], ["Fuente", "Media type", "Media Type", "Medio", "Tipo de Medio", "Source type", "Canal"]) or "MEDIOS"):
+                        p_m = doc.add_paragraph()
+                        p_m.paragraph_format.space_before = Pt(4)
+                        p_m.paragraph_format.space_after = Pt(4)
+                        add_run_verdana(p_m, m_type.upper(), bold=True, size_pt=10)
 
+                        for _, row in grupo_m.iterrows():
+                            autor = obtener_campo(row, ["Autor", "Author name", "Source", "Media name", "Programa"])
+                            handle = obtener_campo(row, ["Author handle (@username)", "Handle", "Username"])
+                            detalle = obtener_campo(row, ["Contenido", "Detail", "Summary", "Síntesis", "Title"])
+                            link = obtener_campo(row, ["URL", "Link", "Enlace"])
+
+                            p_a = doc.add_paragraph()
+                            p_a.paragraph_format.space_before = Pt(4)
+                            p_a.paragraph_format.space_after = Pt(1)
+                            if handle and not handle.startswith("@"): handle = f"@{handle}"
+                            add_run_verdana(p_a, f"{autor} {handle}".strip() if handle else autor, bold=True, size_pt=10)
+
+                            p_d = doc.add_paragraph()
+                            p_d.paragraph_format.space_after = Pt(2)
+                            add_run_verdana(p_d, limpiar_texto(detalle), bold=False, size_pt=9.5)
+
+                            if link:
+                                p_l = doc.add_paragraph()
+                                p_l.paragraph_format.space_after = Pt(6)
+                                add_run_verdana(p_l, link, bold=False, size_pt=9, color_rgb=RGBColor(0, 102, 204), underline=True)
+
+                # Subsección de NEGATIVAS
                 if len(neg_df) > 0:
                     p_neg_hdr = doc.add_paragraph()
                     p_neg_hdr.paragraph_format.space_before = Pt(6)
@@ -369,7 +411,7 @@ if uploaded_file and actor_nombre:
                             p_l.paragraph_format.space_after = Pt(6)
                             add_run_verdana(p_l, link, bold=False, size_pt=9, color_rgb=RGBColor(0, 102, 204), underline=True)
 
-            # Descarga en Streamlit
+            # Descarga
             buffer = io.BytesIO()
             doc.save(buffer)
             buffer.seek(0)
