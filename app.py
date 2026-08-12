@@ -25,9 +25,10 @@ st.set_page_config(
 
 st.title("📊 Generador de Monitoreo de Actores Políticos")
 st.write(
-    "Sube tu reporte de Onclusive o Hanakuá para generar el informe oficial en Word."
+    "Sube tu reporte para generar los informes oficiales en Word con clasificación de IA."
 )
 
+# Configuración de la API Key de Gemini
 GEMINI_API_KEY = "AQ.Ab8RN6LoOHgBblHSIETp2LjyBofO48YsSqSeojXYFAAKGvFa0w"
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
@@ -35,7 +36,6 @@ model = genai.GenerativeModel("gemini-1.5-flash")
 # FUNCIÓN DE CARGA SEGURO EN CASCADA
 def cargar_archivo_seguro(file):
     try:
-        # Si es Excel con múltiples pestañas
         return pd.read_excel(file, sheet_name=None)
     except Exception:
         pass
@@ -43,14 +43,14 @@ def cargar_archivo_seguro(file):
     try:
         file.seek(0)
         df_csv = pd.read_csv(file, on_bad_lines="skip")
-        return {"Hoja1": df_csv}
+        return {"Reporte": df_csv}
     except Exception:
         pass
 
     try:
         file.seek(0)
         df_csv = pd.read_csv(file, encoding="latin1", on_bad_lines="skip")
-        return {"Hoja1": df_csv}
+        return {"Reporte": df_csv}
     except Exception:
         pass
 
@@ -100,9 +100,9 @@ def limpiar_texto(texto):
     ]
     return "\n".join(lineas)
 
-# CORRECCIÓN DE LA FUNCIÓN: Devuelve únicamente un objeto Buffer de memoria o None
-def crear_doc_actor(df_cand, actor_nombre_input):
-    pc_mask = df_cand.apply(
+# PROCESAR UNA HOJA ESPECÍFICA Y GENERAR DOCUMENTO WORD
+def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
+    pc_mask = df_hoja.apply(
         lambda r: (
             "pcgobpue" in str(r.get("Author handle (@username)", "")).lower()
             or "protección civil" in str(r.get("Author name", "")).lower()
@@ -111,12 +111,13 @@ def crear_doc_actor(df_cand, actor_nombre_input):
         ),
         axis=1,
     )
-    df_filtrado = df_cand[~pc_mask].copy()
+    df_filtrado = df_hoja[~pc_mask].copy()
 
-    # Si la pestaña no contiene notas reales
+    # Si la hoja no contiene notas activas
     if len(df_filtrado) == 0 or 'sin notas' in str(df_filtrado.iloc[0].values).lower():
         return None
 
+    # Mapeo de fecha
     serie_fechas_raw = obtener_columna_serie(df_filtrado, ["Publish date", "Fecha", "Date", "Fecha de publicación"])
     df_filtrado["fecha_dt"] = serie_fechas_raw.apply(parsear_fecha_universal)
     df_filtrado["fecha_str"] = df_filtrado["fecha_dt"].apply(lambda dt: dt.strftime("%d.%m.%2y") if pd.notnull(dt) else "")
@@ -128,15 +129,15 @@ def crear_doc_actor(df_cand, actor_nombre_input):
         max_d = fechas_validas.max()
         periodo_texto = f"{min_d.strftime('%d')} al {max_d.strftime('%d')} de {MESES_ES[max_d.month]} de {max_d.year}"
     else:
-        periodo_texto = "12 de agosto de 2026"
+        periodo_texto = "Periodo de Monitoreo"
 
-    # Clasificación de sentimiento
+    # Clasificación con IA
     def clasificar_con_ia(row):
         detalle = obtener_campo(row, ["Contenido", "Detail", "Titulo", "Summary", "Síntesis", "Title"])
         prompt = (
-            "Eres un analista político experto. Evalúa la siguiente publicación sobre '" + str(actor_nombre_input) + "':\n\n"
+            "Eres un analista político experto. Evalúa la siguiente publicación sobre '" + str(nombre_hoja) + "':\n\n"
             "CRITERIO DE CLASIFICACIÓN:\n"
-            "- Responde 'NEGATIVA' ÚNICAMENTE si contiene un ataque personal directo, un insulto, una descalificación explícita o una acusación grave de mal desempeño hacia '" + str(actor_nombre_input) + "'.\n"
+            "- Responde 'NEGATIVA' ÚNICAMENTE si contiene un ataque personal directo, un insulto, una descalificación explícita o una acusación grave de mal desempeño hacia '" + str(nombre_hoja) + "'.\n"
             "- Responde 'POSITIVA' si reporta respaldos de líderes del partido, propuestas, giras, logros o declaraciones del político contra adversarios.\n\n"
             "Texto: \"" + str(detalle) + "\"\n\n"
             "Responde ÚNICAMENTE con una palabra: POSITIVA o NEGATIVA."
@@ -155,14 +156,14 @@ def crear_doc_actor(df_cand, actor_nombre_input):
 
     serie_media = obtener_columna_serie(df_filtrado, ["Fuente", "Media type", "Media Type", "Medio", "Nombre del Medio", "Tipo de Medio", "Canal"])
     
-    redes_cnt = serie_media.astype(str).str.contains("Facebook|X|Twitter|Instagram|TikTok", case=False, na=False).sum()
-    portales_cnt = serie_media.astype(str).str.contains("Portal|Web|Online|Internet", case=False, na=False).sum()
-    prensa_cnt = serie_media.astype(str).str.contains("Prensa|Diario|Periódico", case=False, na=False).sum()
-    columnas_cnt = serie_media.astype(str).str.contains("Columna|Opinión", case=False, na=False).sum()
+    redes_cnt = total_cnt if es_redes_sociales else 0
+    portales_cnt = serie_media.astype(str).str.contains("Portal|Web|Online|Internet", case=False, na=False).sum() if not es_redes_sociales else 0
+    prensa_cnt = serie_media.astype(str).str.contains("Prensa|Diario|Periódico", case=False, na=False).sum() if not es_redes_sociales else 0
+    columnas_cnt = serie_media.astype(str).str.contains("Columna|Opinión", case=False, na=False).sum() if not es_redes_sociales else 0
 
     def obtener_3_temas_positivos_y_negativos(df_data, actor_p):
-        pos_textos = str(df_data[df_data["sentimiento_ia"] == "POSITIVA"]["Titulo"].dropna().head(30).tolist()) if "Titulo" in df_data.columns else str(df_data[df_data["sentimiento_ia"] == "POSITIVA"]["Detail"].dropna().head(30).tolist())
-        neg_textos = str(df_data[df_data["sentimiento_ia"] == "NEGATIVA"]["Titulo"].dropna().head(15).tolist()) if "Titulo" in df_data.columns else str(df_data[df_data["sentimiento_ia"] == "NEGATIVA"]["Detail"].dropna().head(15).tolist())
+        pos_textos = str(df_data[df_data["sentimiento_ia"] == "POSITIVA"]["Contenido"].dropna().head(30).tolist()) if "Contenido" in df_data.columns else str(df_data[df_data["sentimiento_ia"] == "POSITIVA"]["Titulo"].dropna().head(30).tolist())
+        neg_textos = str(df_data[df_data["sentimiento_ia"] == "NEGATIVA"]["Contenido"].dropna().head(15).tolist()) if "Contenido" in df_data.columns else str(df_data[df_data["sentimiento_ia"] == "NEGATIVA"]["Titulo"].dropna().head(15).tolist())
 
         prompt = (
             "Eres un analista de comunicación política. Analiza las noticias sobre '" + str(actor_p) + "'.\n\n"
@@ -182,7 +183,7 @@ def crear_doc_actor(df_cand, actor_nombre_input):
         try:
             return model.generate_content(prompt).text.strip()
         except Exception:
-            return "1. Difusión de actividades públicas y agenda de trabajo.\n2. Presencia en medios digitales e informativos.\n3. Cobertura institucional.\n\nTEMAS NEGATIVOS:\n1. No se registraron temas negativos en el periodo analizado."
+            return "1. Difusión de actividades públicas y agenda de trabajo.\n2. Presencia en medios informativos.\n3. Cobertura de posicionamientos.\n\nTEMAS NEGATIVOS:\n1. No se registraron temas negativos en el periodo analizado."
 
     doc = Document()
     for section in doc.sections:
@@ -208,9 +209,9 @@ def crear_doc_actor(df_cand, actor_nombre_input):
         tcPr = cell._tc.get_or_add_tcPr()
         tcPr.append(parse_xml(f'<w:shd {nsdecls("w")} w:fill="{fill_hex}"/>'))
 
-    # 1. Encabezado
+    # 1. Encabezado (Nombre de la hoja como título)
     p_title = doc.add_paragraph()
-    add_run_verdana(p_title, actor_nombre_input, bold=True, size_pt=12, color_rgb=RGBColor(0, 51, 102))
+    add_run_verdana(p_title, nombre_hoja.upper(), bold=True, size_pt=12, color_rgb=RGBColor(0, 51, 102))
 
     p_per = doc.add_paragraph()
     add_run_verdana(p_per, f"PERIODO DE MEDICIÓN: {periodo_texto}", bold=True, size_pt=10)
@@ -245,7 +246,13 @@ def crear_doc_actor(df_cand, actor_nombre_input):
     p_tot = doc.add_paragraph()
     p_tot.paragraph_format.space_before = Pt(10)
     p_tot.paragraph_format.space_after = Pt(10)
-    add_run_verdana(p_tot, f"TOTAL NOTAS INFORMATIVAS: {total_cnt}\nPORTALES DIGITALES: {portales_cnt + redes_cnt}\nREDES SOCIALES: 0\nPRENSA LOCAL: {prensa_cnt}\nCOLUMNAS: {columnas_cnt}", bold=True, size_pt=10)
+    
+    if es_redes_sociales:
+        texto_totales = f"TOTAL NOTAS INFORMATIVAS: {total_cnt}\nREDES SOCIALES: {total_cnt}\nPORTALES DIGITALES: 0\nPRENSA LOCAL: 0\nCOLUMNAS: 0"
+    else:
+        texto_totales = f"TOTAL NOTAS INFORMATIVAS: {total_cnt}\nPORTALES DIGITALES: {portales_cnt + redes_cnt}\nREDES SOCIALES: 0\nPRENSA LOCAL: {prensa_cnt}\nCOLUMNAS: {columnas_cnt}"
+
+    add_run_verdana(p_tot, texto_totales, bold=True, size_pt=10)
 
     # 3. Resumen
     p_res = doc.add_paragraph()
@@ -256,7 +263,7 @@ def crear_doc_actor(df_cand, actor_nombre_input):
     p_temas.paragraph_format.space_after = Pt(4)
     add_run_verdana(p_temas, "Temas relevantes informativos", bold=True, size_pt=10)
 
-    temas_3x3 = obtener_3_temas_positivos_y_negativos(df_filtrado, actor_nombre_input)
+    temas_3x3 = obtener_3_temas_positivos_y_negativos(df_filtrado, nombre_hoja)
     for linea in temas_3x3.split("\n"):
         linea_clean = linea.strip()
         if linea_clean:
@@ -285,35 +292,66 @@ def crear_doc_actor(df_cand, actor_nombre_input):
         pos_df = sub_df[sub_df["sentimiento_ia"] == "POSITIVA"]
         neg_df = sub_df[sub_df["sentimiento_ia"] == "NEGATIVA"]
 
-        if len(pos_df) > 0:
-            for m_type, grupo_m in pos_df.groupby(lambda i: obtener_campo(pos_df.loc[i], ["Tipo de Nota", "Tipo de Medio", "Fuente"]) or "PORTALES DIGITALES"):
+        if es_redes_sociales:
+            # En redes sociales NO se divide por subredes
+            if len(pos_df) > 0:
                 p_m = doc.add_paragraph()
                 p_m.paragraph_format.space_before = Pt(4)
                 p_m.paragraph_format.space_after = Pt(4)
-                
-                heading_m = "PORTALES DIGITALES" if "Común" in m_type or "Internet" in m_type else m_type.upper()
-                add_run_verdana(p_m, heading_m, bold=True, size_pt=10)
+                add_run_verdana(p_m, "REDES SOCIALES", bold=True, size_pt=10)
 
-                for _, row in grupo_m.iterrows():
-                    medio = obtener_campo(row, ["Nombre del Medio", "Fuente", "Media name"])
-                    autor = obtener_campo(row, ["Autor", "Author name", "Programa"])
-                    titulo = obtener_campo(row, ["Titulo", "Contenido", "Detail", "Summary"])
-                    link = obtener_campo(row, ["Link de Nota", "URL", "Link"])
+                for _, row in pos_df.iterrows():
+                    autor = obtener_campo(row, ["Autor", "Author name", "Fuente", "Media name", "Programa"])
+                    handle = obtener_campo(row, ["Author handle (@username)", "Handle", "Username"])
+                    detalle = obtener_campo(row, ["Contenido", "Detail", "Summary", "Síntesis", "Titulo", "Title"])
+                    link = obtener_campo(row, ["URL", "Link de Nota", "Link", "Enlace"])
 
                     p_a = doc.add_paragraph()
                     p_a.paragraph_format.space_before = Pt(4)
                     p_a.paragraph_format.space_after = Pt(1)
-                    cabecera = f"{medio} - {autor}" if (autor and autor != "Redacción" and autor != "Staff" and autor != "Online") else medio
-                    add_run_verdana(p_a, cabecera, bold=True, size_pt=10)
+                    if handle and not handle.startswith("@"): handle = f"@{handle}"
+                    add_run_verdana(p_a, f"{autor} {handle}".strip() if handle else autor, bold=True, size_pt=10)
 
                     p_d = doc.add_paragraph()
                     p_d.paragraph_format.space_after = Pt(2)
-                    add_run_verdana(p_d, limpiar_texto(titulo), bold=False, size_pt=9.5)
+                    add_run_verdana(p_d, limpiar_texto(detalle), bold=False, size_pt=9.5)
 
                     if link:
                         p_l = doc.add_paragraph()
                         p_l.paragraph_format.space_after = Pt(6)
                         add_run_verdana(p_l, link, bold=False, size_pt=9, color_rgb=RGBColor(0, 102, 204), underline=True)
+
+        else:
+            # En medios tradicionales SE DIVIDE por Tipo de Medio / Nota
+            if len(pos_df) > 0:
+                for m_type, grupo_m in pos_df.groupby(lambda i: obtener_campo(pos_df.loc[i], ["Tipo de Nota", "Tipo de Medio", "Fuente"]) or "PORTALES DIGITALES"):
+                    p_m = doc.add_paragraph()
+                    p_m.paragraph_format.space_before = Pt(4)
+                    p_m.paragraph_format.space_after = Pt(4)
+                    
+                    heading_m = "PORTALES DIGITALES" if ("Común" in m_type or "Internet" in m_type) else m_type.upper()
+                    add_run_verdana(p_m, heading_m, bold=True, size_pt=10)
+
+                    for _, row in grupo_m.iterrows():
+                        medio = obtener_campo(row, ["Nombre del Medio", "Fuente", "Media name"])
+                        autor = obtener_campo(row, ["Autor", "Author name", "Programa"])
+                        titulo = obtener_campo(row, ["Titulo", "Contenido", "Detail", "Summary"])
+                        link = obtener_campo(row, ["Link de Nota", "URL", "Link"])
+
+                        p_a = doc.add_paragraph()
+                        p_a.paragraph_format.space_before = Pt(4)
+                        p_a.paragraph_format.space_after = Pt(1)
+                        cabecera = f"{medio} - {autor}" if (autor and autor != "Redacción" and autor != "Staff" and autor != "Online") else medio
+                        add_run_verdana(p_a, cabecera, bold=True, size_pt=10)
+
+                        p_d = doc.add_paragraph()
+                        p_d.paragraph_format.space_after = Pt(2)
+                        add_run_verdana(p_d, limpiar_texto(titulo), bold=False, size_pt=9.5)
+
+                        if link:
+                            p_l = doc.add_paragraph()
+                            p_l.paragraph_format.space_after = Pt(6)
+                            add_run_verdana(p_l, link, bold=False, size_pt=9, color_rgb=RGBColor(0, 102, 204), underline=True)
 
         if len(neg_df) > 0:
             p_neg_hdr = doc.add_paragraph()
@@ -347,68 +385,77 @@ def crear_doc_actor(df_cand, actor_nombre_input):
     buffer.seek(0)
     return buffer
 
+
 # --- INTERFAZ STREAMLIT ---
 
+tipo_analisis = st.radio(
+    "¿Qué tipo de archivo vas a analizar?",
+    ["Redes Sociales", "Medios Tradicionales / Portales (Prensa, TV, Radio, Portales)"],
+    index=0
+)
+
 uploaded_file = st.file_uploader(
-    "Sube tu archivo Excel o CSV de Monitoreo (Soporta múltiples páginas/candidatos de Hanakuá)", type=["xlsx", "xls", "csv"]
+    "Sube tu archivo Excel o CSV de Monitoreo", type=["xlsx", "xls", "csv"]
 )
 
 if uploaded_file:
     try:
         dict_hojas = cargar_archivo_seguro(uploaded_file)
+        hojas_disponibles = list(dict_hojas.keys())
+        es_redes = (tipo_analisis == "Redes Sociales")
         
-        candidatos_disponibles = list(dict_hojas.keys())
-        
-        st.subheader("Candidatos detectados en el archivo:")
-        st.write(", ".join(candidatos_disponibles))
+        st.subheader("Hojas / Secciones detectadas en el archivo:")
+        st.write(", ".join(hojas_disponibles))
 
         modo = st.radio(
             "Selecciona la modalidad de descarga:",
-            ["Generar un Candidato Específico", "Generar TODOS los Candidatos en un archivo .ZIP (Masivo)"],
+            ["Generar una Hoja Específica", "Generar TODAS las Hojas en un archivo .ZIP (Masivo)"],
             index=0
         )
 
-        if modo == "Generar un Candidato Específico":
-            candidato_sel = st.selectbox("Selecciona el candidato:", candidatos_disponibles)
-            if st.button("Generar Reporte de Candidato", type="primary"):
-                with st.spinner("Analizando noticias con IA..."):
-                    df_c = dict_hojas[candidato_sel]
+        if modo == "Generar una Hoja Específica":
+            hoja_sel = st.selectbox("Selecciona la hoja a procesar:", hojas_disponibles)
+            if st.button("Generar Reporte de esta Hoja", type="primary"):
+                with st.spinner("Analizando publicaciones con IA..."):
+                    df_h = dict_hojas[hoja_sel]
                     
-                    if 'Menu' in df_c.columns and len(df_c['Menu'].dropna()) > 0:
-                        nombre_c = str(df_c['Menu'].dropna().iloc[0]).strip()
+                    # Si tiene columna Menu usarla; de lo contrario el nombre de la hoja
+                    if 'Menu' in df_h.columns and len(df_h['Menu'].dropna()) > 0:
+                        nombre_h = str(df_h['Menu'].dropna().iloc[0]).strip()
                     else:
-                        nombre_c = candidato_sel
+                        nombre_h = hoja_sel
 
-                    buf = crear_doc_actor(df_c, nombre_c)
+                    buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes)
                     if buf is not None:
-                        st.success(f"¡Reporte generado exitosamente para {nombre_c}!")
+                        st.success(f"¡Reporte generado exitosamente para '{nombre_h}'!")
                         st.download_button(
-                            label=f"📥 Descargar Reporte Word de {nombre_c}",
+                            label=f"📥 Descargar Reporte Word de {nombre_h}",
                             data=buf,
-                            file_name=f"Reporte_{nombre_c.replace(' ', '_')}.docx",
+                            file_name=f"Reporte_{nombre_h.replace(' ', '_')}.docx",
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                         )
                     else:
-                        st.warning(f"La pestaña o candidato '{candidato_sel}' no contiene notas registradas para el día de hoy.")
+                        st.warning(f"La hoja '{hoja_sel}' no contiene notas registradas para el día de hoy.")
 
         else:
-            if st.button("Generar y Descargar TODOS los Reportes en .ZIP", type="primary"):
-                with st.spinner("Generando reportes individuales para todos los candidatos con IA..."):
+            if st.button("Generar y Descargar TODAS las Hojas en .ZIP", type="primary"):
+                with st.spinner("Generando reportes individualesAS las Hojas en .ZIP", type="primary"):
+                with st.spinner("Generando reportes individuales para todas las hojas con IA..."):
                     zip_buffer = io.BytesIO()
                     cnt_generados = 0
                     
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                        for cand_key in candidatos_disponibles:
-                            df_c = dict_hojas[cand_key]
-                            if 'Menu' in df_c.columns and len(df_c['Menu'].dropna()) > 0:
-                                nombre_c = str(df_c['Menu'].dropna().iloc[0]).strip()
+                        for h_key in hojas_disponibles:
+                            df_h = dict_hojas[h_key]
+                            if 'Menu' in df_h.columns and len(df_h['Menu'].dropna()) > 0:
+                                nombre_h = str(df_h['Menu'].dropna().iloc[0]).strip()
                             else:
-                                nombre_c = cand_key
+                                nombre_h = h_key
 
-                            buf = crear_doc_actor(df_c, nombre_c)
+                            buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes)
                             if buf is not None:
                                 doc_bytes = buf.getvalue()
-                                fname = f"Reporte_{nombre_c.replace(' ', '_')}.docx"
+                                fname = f"Reporte_{nombre_h.replace(' ', '_')}.docx"
                                 zip_file.writestr(fname, doc_bytes)
                                 cnt_generados += 1
 
@@ -418,7 +465,7 @@ if uploaded_file:
                         st.download_button(
                             label="📦 Descargar Archivo .ZIP con TODOS los Reportes",
                             data=zip_buffer,
-                            file_name="Reportes_Candidatos_Hanakuá.zip",
+                            file_name="Reportes_Monitoreo_Completos.zip",
                             mime="application/zip"
                         )
                     else:
@@ -426,6 +473,3 @@ if uploaded_file:
 
     except Exception as e:
         st.error(f"Error procesando el archivo: {str(e)}")
-
-    
-
