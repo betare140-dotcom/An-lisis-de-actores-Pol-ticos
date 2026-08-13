@@ -112,7 +112,7 @@ def limpiar_texto(texto):
     ]
     return "\n".join(lineas)
 
-# PROCESAR UNA HOJA Y GENERAR DOCUMENTO WORD CON MARCO DE FRAMING
+# PROCESAR UNA HOJA Y GENERAR DOCUMENTO WORD
 def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     pc_mask = df_hoja.apply(
         lambda r: (
@@ -129,7 +129,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     if len(df_filtrado) == 0 or 'sin notas' in str(df_filtrado.iloc[0].values).lower():
         return None
 
-    # Mapeo y orden cronológico de fechas por objeto datetime
+    # Mapeo y orden cronológico de fechas
     serie_fechas_raw = obtener_columna_serie(df_filtrado, ["Publish date", "Fecha", "Date", "Fecha de publicación"])
     df_filtrado["fecha_dt"] = serie_fechas_raw.apply(parsear_fecha_todas_las_formas)
     df_filtrado = df_filtrado.dropna(subset=["fecha_dt"]).sort_values(by="fecha_dt", ascending=True)
@@ -148,7 +148,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     else:
         periodo_texto = f"{min_d.strftime('%d')} al {max_d.strftime('%d')} de {MESES_ES[max_d.month]} de {max_d.year}"
 
-    # Clasificación con IA usando tu marco de Framing
+    # Clasificación con IA usando marco de Framing
     def clasificar_con_ia(row):
         detalle = obtener_campo(row, ["Contenido", "Detail", "Titulo", "Summary", "Síntesis", "Title"])
         prompt = (
@@ -172,7 +172,6 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
 
     df_filtrado["sentimiento_ia"] = df_filtrado.apply(clasificar_con_ia, axis=1)
 
-    # Conteo oficial
     positivas_cnt = len(df_filtrado[df_filtrado["sentimiento_ia"].isin(["POSITIVA", "NEUTRA"])])
     negativas_cnt = len(df_filtrado[df_filtrado["sentimiento_ia"] == "NEGATIVA"])
     total_cnt = len(df_filtrado)
@@ -466,10 +465,6 @@ if uploaded_file:
                             df_h = dict_hojas[h_key]
                             if 'Menu' in df_h.columns and len(df_h['Menu'].dropna()) > 0:
                                 nombre_h = str(df_h['Menu'].dropna().iloc[0]).strip()
-                            else:
-                                nombre_h = h_key
-
-                            buf = creariloc[0]).strip()
                             else:
                                 nombre_h = h_key
 
