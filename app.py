@@ -13,6 +13,7 @@ from docx.shared import Inches, Pt, RGBColor
 import pandas as pd
 import streamlit as st
 
+# Diccionario de meses en español
 MESES_ES = {
     1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
     7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
@@ -30,10 +31,12 @@ st.write(
     "con clasificación de IA."
 )
 
+# API Key Pre-integrada
 GEMINI_API_KEY = "AQ.Ab8RN6LoOHgBblHSIETp2LjyBofO48YsSqSeojXYFAAKGvFa0w"
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
+# FUNCIÓN DE CARGA SEGURO EN CASCADA
 def cargar_archivo_seguro(file):
     try:
         return pd.read_excel(file, sheet_name=None)
@@ -54,7 +57,11 @@ def cargar_archivo_seguro(file):
     except Exception:
         pass
 
-    raise Exception("No se pudo leer el archivo. Asegúrate de que sea un archivo Excel (.xlsx/.xls) o CSV válido.")
+    raise Exception(
+        "No se pudo leer el archivo. "
+        "Asegúrate de que sea un archivo Excel (.xlsx/.xls) "
+        "o CSV válido."
+    )
 
 def obtener_campo(row, lista_cols):
     for c in lista_cols:
@@ -87,6 +94,7 @@ def parsear_fecha_perfecta(val):
         s = s.split(",")[0].strip()
     s_date = s.split(" ")[0].strip()
 
+    # Caso YYYY-MM-DD
     if "-" in s_date:
         try:
             parts = s_date.split("-")
@@ -95,6 +103,7 @@ def parsear_fecha_perfecta(val):
         except Exception:
             pass
 
+    # Caso DD/MM/YYYY
     if "/" in s_date:
         try:
             parts = s_date.split("/")
@@ -102,7 +111,9 @@ def parsear_fecha_perfecta(val):
                 if len(parts[0]) == 4:
                     return datetime(int(parts[0]), int(parts), int(parts))
                 else:
-                    d, m, y = int(parts[0]), int(parts), int(parts)
+                    d = int(parts[0])
+                    m = int(parts)
+                    y = int(parts)
                     if y < 100: y += 2000
                     return datetime(y, m, d)
         except Exception:
@@ -152,19 +163,19 @@ La prioridad absoluta es detectar TODA publicación que pueda afectar negativame
 CATEGORÍAS
 ============================================================
 POSITIVA / INFORMATIVA:
-Clasifica como POSITIVA cuando la publicación presenta favorablemente al actor político, su gobierno, administración, acciones o resultados.
+Clasifica como POSITIVA cuando la publicación presenta favorablemente al actor político, su gobierno, administración, acciones o resultados (inauguraciones, programas sociales, apoyos, respaldo, avances).
 
 NEUTRA / INFORMATIVA:
-Clasifica como NEUTRA cuando la publicación simplemente informa sobre un hecho y NO existe una afectación directa a la reputación del actor político.
-- Reportes policiales o nota roja que solo relatan un suceso sin responsabilizar al actor = NEUTRA.
+Clasifica como NEUTRA cuando la publicación simplemente informa sobre un hecho descriptivo sin afectar ni favorecer la imagen del actor político.
+- Reportes policíacos, accidentes o sucesos generales que no responsabilizan al actor = NEUTRA.
 
 NEGATIVA / CRÍTICA:
-Clasifica como NEGATIVA cuando el contenido afecta DIRECTAMENTE al actor político "{actor_nombre_target}", su gobierno, administración, gestión, equipo político o reputación.
+Clasifica como NEGATIVA cuando el contenido afecta DIRECTAMENTE al actor político "{actor_nombre_target}", su administración, gestión, equipo o reputación.
 Debe considerarse NEGATIVA cualquier contenido que:
-- Critique directamente al actor político o lo señale como incompetente.
-- Lo acuse de corrupción, nepotismo, favoritismo o falta de resultados.
-- Denuncie despintado de bardas, clausura ciudadana o actos de campaña anticipada.
-- Contenga ataques directos de opositores o columnas hostiles.
+- Critique directamente al actor o cuestione su capacidad de gobierno.
+- Lo acuse de corrupción, nepotismo, desvío de recursos o falta de resultados.
+- Denuncie despintado/clausura de bardas, propaganda ilegal o actos anticipados de campaña.
+- Contenga ataques directos de opositores, quejas ciudadanas o columnas hostiles.
 
 ============================================================
 TEXTO A ANALIZAR
@@ -204,7 +215,10 @@ def obtener_3_temas_positivos_y_negativos(df_data, actor_p):
     )
 
     prompt = f"""
-Eres un analista de comunicación política. Analiza las noticias sobre "{actor_p}".
+Eres un analista experto en comunicación y monitoreo político.
+Tu objetivo es redactar un RESUMEN EJECUTIVO estructurado para el actor político "{actor_p}".
+
+Debes basarte ESTRICTAMENTE en los eventos y noticias del bloque analizado:
 
 NOTICIAS POSITIVAS / INFORMATIVAS:
 {pos_textos}
@@ -212,18 +226,26 @@ NOTICIAS POSITIVAS / INFORMATIVAS:
 NOTICIAS NEGATIVAS / CRÍTICAS:
 {neg_textos}
 
-INSTRUCCIONES:
-1. NO incluyas frases estadísticas como "Predominó la cobertura favorable...".
-2. Redacta exactamente 3 temas positivos o informativos principales.
-3. Redacta exactamente 3 temas negativos principales. Si no existen noticias negativas, escribe: "1. No se registraron temas negativos en el periodo analizado."
+INSTRUCCIONES CLAVE:
+1. TEMAS RELEVANTES INFORMATIVOS (POSITIVOS):
+   - Extrae hechos y acciones significativas concretas realizadas por el actor político en las notas (ej. inauguración de obras, entrega de apoyos o agua, jornadas ciudadanas, programas sociales, acuerdos políticos, avances institucionales y balance favorable de su actuar público).
+   - Redacta exactamente 3 puntos concisos, directos y con sustancia real de lo que hizo el actor.
 
-FORMATO:
-1. [Primer tema positivo]
-2. [Segundo tema positivo]
-3. [Tercer tema positivo]
+2. TEMAS NEGATIVOS:
+   - Extrae controversias, ataques directos de opositores, señalamientos de mala gestión, protestas ciudadanas, cuestionamientos a su actuar público o quejas por propaganda/bardas/campañas anticipadas registradas en las notas.
+   - Redacta exactamente 3 puntos negativos (o menos si son pocos). Si no se registraron eventos negativos en las notas analizadas, escribe únicamente: "1. No se registraron temas negativos en el periodo analizado."
+
+3. REGLAS DE FORMATO:
+   - NO incluyas frases estadísticas como "Predominó la cobertura favorable...".
+   - Usa viñetas numeradas (1., 2., 3.).
+
+FORMATO ESTRICTO DE SALIDA:
+1. [Primer tema positivo/informativo relevante y significativo]
+2. [Segundo tema positivo/informativo relevante y significativo]
+3. [Tercer tema positivo/informativo relevante y significativo]
 
 TEMAS NEGATIVOS:
-1. [Primer tema negativo o 'No se registraron temas negativos en el periodo analizado.']
+1. [Primer tema negativo concreto o 'No se registraron temas negativos en el periodo analizado.']
 """
     try:
         return model.generate_content(prompt).text.strip()
@@ -323,7 +345,8 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
         run.italic = italic
         run.font.size = Pt(size_pt)
         run.underline = underline
-        if color_rgb: run.font.color.rgb = color_rgb
+        if color_rgb:
+            run.font.color.rgb = color_rgb
         return run
 
     def fondo_celda(cell, fill_hex):
@@ -424,7 +447,6 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                     autor = obtener_campo(row, ["Autor", "Author name", "Fuente", "Media name", "Programa"])
                     handle = obtener_campo(row, ["Author handle (@username)", "Handle", "Username"])
                     detalle = obtener_campo(row, ["Contenido", "Detail", "Summary", "Síntesis", "Titulo", "Title"])
-                    # PRIORIDAD A 'Link URL Medio'
                     link = obtener_campo(row, ["Link URL Medio", "URL", "Link de Nota", "Link", "Enlace"])
 
                     p_a = doc.add_paragraph()
@@ -456,7 +478,6 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                         medio = obtener_campo(row, ["Nombre del Medio", "Fuente", "Media name"])
                         autor = obtener_campo(row, ["Autor", "Author name", "Programa"])
                         titulo = obtener_campo(row, ["Titulo", "Contenido", "Detail", "Summary"])
-                        # PRIORIDAD A 'Link URL Medio'
                         link = obtener_campo(row, ["Link URL Medio", "URL", "Link de Nota", "Link", "Enlace"])
 
                         p_a = doc.add_paragraph()
@@ -484,7 +505,6 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                 medio = obtener_campo(row, ["Nombre del Medio", "Fuente", "Media name"])
                 autor = obtener_campo(row, ["Autor", "Author name", "Programa"])
                 titulo = obtener_campo(row, ["Titulo", "Contenido", "Detail", "Summary"])
-                # PRIORIDAD A 'Link URL Medio'
                 link = obtener_campo(row, ["Link URL Medio", "URL", "Link de Nota", "Link", "Enlace"])
 
                 p_a = doc.add_paragraph()
