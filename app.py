@@ -79,7 +79,7 @@ def obtener_columna_serie(df_data, lista_posibles_cols):
     return pd.Series([""] * len(df_data), index=df_data.index)
 
 # PARSER ESTRUCTURADO PARA GARANTIZAR DÍA, MES Y AÑO (DD.MM.YY)
-def parsear_fecha_estricta_dia_mes_anio(val):
+def parsear_fecha_perfecta(val):
     if not val or pd.isna(val) or str(val) == "nan":
         return pd.NaT
     s = str(val).strip()
@@ -87,7 +87,7 @@ def parsear_fecha_estricta_dia_mes_anio(val):
         s = s.split(',')[0].strip()
     s_date = s.split(' ')[0].strip()
     
-    # Caso YYYY-MM-DD
+    # Caso YYYY-MM-DD (ej. Hanakuá)
     if '-' in s_date:
         try:
             parts = s_date.split('-')
@@ -96,14 +96,17 @@ def parsear_fecha_estricta_dia_mes_anio(val):
         except Exception:
             pass
 
-    # Caso DD/MM/YYYY (fuerza a leer el primer número como DÍA)
+    # Caso DD/MM/YYYY (fuerza el primer número como DÍA)
     if '/' in s_date:
         try:
             parts = s_date.split('/')
             if len(parts) == 3:
-                d, m, y = int(parts[0]), int(parts), int(parts)
-                if y < 100: y += 2000
-                return datetime(y, m, d)
+                if len(parts[0]) == 4:
+                    return datetime(int(parts[0]), int(parts), int(parts))
+                else:
+                    d, m, y = int(parts[0]), int(parts), int(parts)
+                    if y < 100: y += 2000
+                    return datetime(y, m, d)
         except Exception:
             pass
 
@@ -125,7 +128,7 @@ def limpiar_texto(texto):
     ]
     return "\n".join(lineas)
 
-# PROCESAR UNA HOJA Y GENERAR DOCUMENTO WORD
+# PROCESAR HOJA Y GENERAR WORD
 def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     pc_mask = df_hoja.apply(
         lambda r: (
@@ -142,15 +145,14 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     if len(df_filtrado) == 0 or 'sin notas' in str(df_filtrado.iloc[0].values).lower():
         return None
 
-    # Parseo estricto Día/Mes/Año y ordenamiento por objeto datetime
+    # Parseo de fecha Día/Mes/Año y ordenamiento por datetime
     serie_fechas_raw = obtener_columna_serie(df_filtrado, ["Publish date", "Fecha", "Date", "Fecha de publicación"])
-    df_filtrado["fecha_dt"] = serie_fechas_raw.apply(parsear_fecha_estricta_dia_mes_anio)
+    df_filtrado["fecha_dt"] = serie_fechas_raw.apply(parsear_fecha_perfecta)
     df_filtrado = df_filtrado.dropna(subset=["fecha_dt"]).sort_values(by="fecha_dt", ascending=True)
 
     if len(df_filtrado) == 0:
         return None
 
-    # Formato strictly Día.Mes.Año (ej. 07.08.26)
     df_filtrado["fecha_str"] = df_filtrado["fecha_dt"].dt.strftime("%d.%m.%2y")
 
     fechas_validas = df_filtrado["fecha_dt"]
@@ -332,7 +334,8 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                 p_m = doc.add_paragraph()
                 p_m.paragraph_format.space_before = Pt(4)
                 p_m.paragraph_format.space_after = Pt(4)
-                add_run_verdana(p_m, "REDES SOCIALES", bold=True, size_pt=10)
+                # MOSTRAR EL NÚMERO DE NOTAS POR DÍA EN EL ENCABEZADO
+                add_run_verdana(p_m, f"REDES SOCIALES: {len(pos_df)}", bold=True, size_pt=10)
 
                 for _, row in pos_df.iterrows():
                     autor = obtener_campo(row, ["Autor", "Author name", "Fuente", "Media name", "Programa"])
@@ -362,8 +365,9 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                     p_m.paragraph_format.space_before = Pt(4)
                     p_m.paragraph_format.space_after = Pt(4)
                     
-                    heading_m = "PORTALES DIGITALES" if ("Común" in m_type or "Internet" in m_type) else m_type.upper()
-                    add_run_verdana(p_m, heading_m, bold=True, size_pt=10)
+                    heading_base = "PORTALES DIGITALES" if ("Común" in m_type or "Internet" in m_type) else m_type.upper()
+                    # MOSTRAR EL NÚMERO DE NOTAS POR DÍA Y CANAL EN EL ENCABEZADO
+                    add_run_verdana(p_m, f"{heading_base}: {len(grupo_m)}", bold=True, size_pt=10)
 
                     for _, row in grupo_m.iterrows():
                         medio = obtener_campo(row, ["Nombre del Medio", "Fuente", "Media name"])
@@ -390,7 +394,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
             p_neg_hdr = doc.add_paragraph()
             p_neg_hdr.paragraph_format.space_before = Pt(6)
             p_neg_hdr.paragraph_format.space_after = Pt(4)
-            add_run_verdana(p_neg_hdr, "NEGATIVAS", bold=True, size_pt=10, color_rgb=RGBColor(180, 0, 0))
+            add_run_verdana(p_neg_hdr, f"NEGATIVAS: {len(neg_df)}", bold=True, size_pt=10, color_rgb=RGBColor(180, 0, 0))
 
             for _, row in neg_df.iterrows():
                 medio = obtener_campo(row, ["Nombre del Medio", "Fuente", "Media name"])
