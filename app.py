@@ -87,7 +87,7 @@ def parsear_fecha_perfecta(val):
         s = s.split(',')[0].strip()
     s_date = s.split(' ')[0].strip()
     
-    # Caso YYYY-MM-DD (ej. Hanakuá)
+    # Caso 1: YYYY-MM-DD
     if '-' in s_date:
         try:
             parts = s_date.split('-')
@@ -96,7 +96,7 @@ def parsear_fecha_perfecta(val):
         except Exception:
             pass
 
-    # Caso DD/MM/YYYY (fuerza el primer número como DÍA)
+    # Caso 2: DD/MM/YYYY (fuerza a leer el primer número como DÍA)
     if '/' in s_date:
         try:
             parts = s_date.split('/')
@@ -128,7 +128,7 @@ def limpiar_texto(texto):
     ]
     return "\n".join(lineas)
 
-# PROCESAR HOJA Y GENERAR WORD
+# PROCESAR UNA HOJA Y GENERAR DOCUMENTO WORD
 def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     pc_mask = df_hoja.apply(
         lambda r: (
@@ -164,7 +164,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     else:
         periodo_texto = f"{min_d.strftime('%d')} al {max_d.strftime('%d')} de {MESES_ES[max_d.month]} de {max_d.year}"
 
-    # Clasificación con IA usando marco de Framing
+    # Clasificación con IA usando marco de Framing (incluye caso de bardas/campañas anticipadas)
     def clasificar_con_ia(row):
         detalle = obtener_campo(row, ["Contenido", "Detail", "Titulo", "Summary", "Síntesis", "Title"])
         prompt = (
@@ -172,7 +172,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
             "Tu tarea es analizar el texto referente a '" + str(nombre_hoja) + "' para determinar su intencionalidad basándote en su encuadre (framing):\n\n"
             "- Positiva / Institucional: Notas que promueven la agenda, destacan inauguraciones, apoyos, programas sociales, buena imagen del actor político, respaldos o clima de gobernabilidad.\n"
             "- Neutra / Informativa: Cobertura estrictamente descriptiva, hechos sin sesgo, agendas del día, encuestas de posición o nota roja policial sin adjudicar culpa o responsabilidad directa al actor o administración.\n"
-            "- Negativa / Crítica: Textos de crisis reputacional, escándalos de corrupción, ataques directos de opositores, columnas hostiles, protestas o acusaciones explícitas de inacción o mala gestión hacia el actor o administración.\n\n"
+            "- Negativa / Crítica: Textos de crisis reputacional, escándalos de corrupción, denuncias por campaña anticipada, despintado/clausura de bardas publicitarias, ataques directos de opositores, columnas hostiles, protestas o acusaciones explícitas de inacción o mala gestión hacia el actor o administración.\n\n"
             "Texto a analizar: \"" + str(detalle) + "\"\n\n"
             "Responde ÚNICAMENTE con una palabra: POSITIVA, NEUTRA o NEGATIVA."
         )
@@ -334,7 +334,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                 p_m = doc.add_paragraph()
                 p_m.paragraph_format.space_before = Pt(4)
                 p_m.paragraph_format.space_after = Pt(4)
-                # MOSTRAR EL NÚMERO DE NOTAS POR DÍA EN EL ENCABEZADO
+                # MUESTRA EL NÚMERO DE NOTAS POR DÍA (ej. REDES SOCIALES: 7)
                 add_run_verdana(p_m, f"REDES SOCIALES: {len(pos_df)}", bold=True, size_pt=10)
 
                 for _, row in pos_df.iterrows():
@@ -366,7 +366,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                     p_m.paragraph_format.space_after = Pt(4)
                     
                     heading_base = "PORTALES DIGITALES" if ("Común" in m_type or "Internet" in m_type) else m_type.upper()
-                    # MOSTRAR EL NÚMERO DE NOTAS POR DÍA Y CANAL EN EL ENCABEZADO
+                    # MUESTRA EL NÚMERO DE NOTAS POR DÍA Y TIPO (ej. PORTALES DIGITALES: 5)
                     add_run_verdana(p_m, f"{heading_base}: {len(grupo_m)}", bold=True, size_pt=10)
 
                     for _, row in grupo_m.iterrows():
@@ -394,6 +394,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
             p_neg_hdr = doc.add_paragraph()
             p_neg_hdr.paragraph_format.space_before = Pt(6)
             p_neg_hdr.paragraph_format.space_after = Pt(4)
+            # MUESTRA EL NÚMERO DE NOTAS NEGATIVAS POR DÍA (ej. NEGATIVAS: 3)
             add_run_verdana(p_neg_hdr, f"NEGATIVAS: {len(neg_df)}", bold=True, size_pt=10, color_rgb=RGBColor(180, 0, 0))
 
             for _, row in neg_df.iterrows():
