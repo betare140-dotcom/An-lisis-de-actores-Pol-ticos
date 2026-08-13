@@ -19,7 +19,6 @@ MESES_ES = {
     7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
 }
 
-# Configuración de la página
 st.set_page_config(
     page_title="Monitoreo Político Oficial",
     page_icon="📊",
@@ -138,7 +137,7 @@ def limpiar_texto(texto):
     ]
     return "\n".join(lineas)
 
-def clasificar_con_ia(row, nombre_hoja):
+def clasificar_con_ia(row, actor_nombre_target):
     detalle = obtener_campo(
         row,
         ["Contenido", "Detail", "Titulo", "Summary", "Síntesis", "Title"]
@@ -152,13 +151,13 @@ ROL:
 Eres un analista experto en monitoreo de medios, comunicación política, reputación gubernamental y análisis de framing.
 
 Tu tarea es analizar una noticia, columna o publicación de redes sociales sobre el actor político:
-"{nombre_hoja}"
+"{actor_nombre_target}"
 y determinar su impacto reputacional.
 
 ============================================================
 OBJETIVO PRINCIPAL
 ============================================================
-La prioridad absoluta es detectar TODA publicación que pueda afectar negativamente la imagen, reputación, credibilidad, desempeño, gestión o percepción pública del actor político.
+La prioridad absoluta es detectar TODA publicación que pueda afectar negativamente la imagen, reputación, credibilidad, desempeño, gestión o percepción pública del actor político "{actor_nombre_target}".
 
 ============================================================
 CATEGORÍAS
@@ -171,7 +170,7 @@ Clasifica como NEUTRA cuando la publicación simplemente informa sobre un hecho 
 - Reportes policiales o nota roja que solo relatan un suceso sin responsabilizar al actor = NEUTRA.
 
 NEGATIVA / CRÍTICA:
-Clasifica como NEGATIVA cuando el contenido afecta DIRECTAMENTE al actor político "{nombre_hoja}", su gobierno, administración, gestión, equipo político o reputación.
+Clasifica como NEGATIVA cuando el contenido afecta DIRECTAMENTE al actor político "{actor_nombre_target}", su gobierno, administración, gestión, equipo político o reputación.
 Debe considerarse NEGATIVA cualquier contenido que:
 - Critique directamente al actor político o lo señale como incompetente.
 - Lo acuse de corrupción, nepotismo, favoritismo o falta de resultados.
@@ -224,12 +223,12 @@ NOTICIAS POSITIVAS / INFORMATIVAS:
 NOTICIAS NEGATIVAS / CRÍTICAS:
 {neg_textos}
 
-INSTRUCCIONES ESTRICTAS:
+INSTRUCCIONES:
 1. NO incluyas frases estadísticas como "Predominó la cobertura favorable...".
-2. Redacta ESTRICTAMENTE 3 temas positivos o informativos principales numerados (1., 2., 3.).
-3. Redacta ESTRICTAMENTE 3 temas negativos principales numerados (1., 2., 3.). Si no existen noticias negativas, escribe simplemente: "1. No se registraron temas negativos en el periodo analizado."
+2. Redacta exactamente 3 temas positivos o informativos principales.
+3. Redacta exactamente 3 temas negativos principales. Si no existen noticias negativas, escribe: "1. No se registraron temas negativos en el periodo analizado."
 
-FORMATO EXACTO DE SALIDA:
+FORMATO:
 1. [Primer tema positivo]
 2. [Segundo tema positivo]
 3. [Tercer tema positivo]
@@ -430,7 +429,6 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                 p_m = doc.add_paragraph()
                 p_m.paragraph_format.space_before = Pt(4)
                 p_m.paragraph_format.space_after = Pt(4)
-                # MOSTRAR EL CONTEO DE NOTAS POR DÍA
                 add_run_verdana(p_m, f"REDES SOCIALES: {len(pos_df)}", bold=True, size_pt=10)
 
                 for _, row in pos_df.iterrows():
@@ -462,7 +460,6 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                     p_m.paragraph_format.space_before = Pt(4)
                     p_m.paragraph_format.space_after = Pt(4)
                     heading_base = "PORTALES DIGITALES" if ("Común" in m_type or "Internet" in m_type) else m_type.upper()
-                    # MOSTRAR EL CONTEO DE NOTAS POR DÍA
                     add_run_verdana(p_m, f"{heading_base}: {len(grupo_m)}", bold=True, size_pt=10)
 
                     for _, row in grupo_m.iterrows():
@@ -490,7 +487,6 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
             p_neg_hdr = doc.add_paragraph()
             p_neg_hdr.paragraph_format.space_before = Pt(6)
             p_neg_hdr.paragraph_format.space_after = Pt(4)
-            # MOSTRAR EL CONTEO DE NOTAS NEGATIVAS POR DÍA
             add_run_verdana(p_neg_hdr, f"NEGATIVAS: {len(neg_df)}", bold=True, size_pt=10, color_rgb=RGBColor(180, 0, 0))
 
             for _, row in neg_df.iterrows():
@@ -530,84 +526,111 @@ tipo_analisis = st.radio(
     index=0
 )
 
-uploaded_file = st.file_uploader(
-    "Sube tu archivo Excel o CSV de Monitoreo",
-    type=["xlsx", "xls", "csv"]
-)
+if tipo_analisis == "Redes Sociales":
+    uploaded_file = st.file_uploader(
+        "Sube tu archivo Excel o CSV de Redes Sociales",
+        type=["xlsx", "xls", "csv"]
+    )
+    actor_nombre_in = st.text_input(
+        "Nombre y Partido del Actor Político",
+        placeholder="ej. LAURA ARTEMISA GARCÍA CHÁVEZ (MORENA)",
+    ).strip().upper()
 
-if uploaded_file:
-    try:
-        dict_hojas = cargar_archivo_seguro(uploaded_file)
-        hojas_disponibles = list(dict_hojas.keys())
-        es_redes = (tipo_analisis == "Redes Sociales")
-        
-        st.subheader("Hojas / Secciones detectadas en el archivo:")
-        st.write(", ".join(hojas_disponibles))
-
-        modo = st.radio(
-            "Selecciona la modalidad de descarga:",
-            [
-                "Generar una Hoja Específica",
-                "Generar TODAS las Hojas en un archivo .ZIP (Masivo)"
-            ],
-            index=0
-        )
-
-        if modo == "Generar una Hoja Específica":
-            hoja_sel = st.selectbox("Selecciona la hoja a procesar:", hojas_disponibles)
-            if st.button("Generar Reporte de esta Hoja", type="primary"):
-                with st.spinner("Analizando publicaciones con IA..."):
-                    df_h = dict_hojas[hoja_sel]
-                    
-                    if 'Menu' in df_h.columns and len(df_h['Menu'].dropna()) > 0:
-                        nombre_h = str(df_h['Menu'].dropna().iloc[0]).strip()
-                    else:
-                        nombre_h = hoja_sel
-
-                    buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes)
+    if uploaded_file and actor_nombre_in:
+        if st.button("Generar Reporte Oficial", type="primary"):
+            with st.spinner("Analizando publicaciones con IA..."):
+                try:
+                    dict_h = cargar_archivo_seguro(uploaded_file)
+                    df_redes = list(dict_h.values())[0]
+                    buf = crear_doc_desde_hoja(df_redes, actor_nombre_in, es_redes_sociales=True)
                     if buf is not None:
-                        st.success(f"¡Reporte generado exitosamente para '{nombre_h}'!")
+                        st.success(f"¡Reporte generado exitosamente para '{actor_nombre_in}'!")
                         st.download_button(
-                            label=f"📥 Descargar Reporte Word de {nombre_h}",
+                            label=f"📥 Descargar Reporte Word de {actor_nombre_in}",
                             data=buf,
-                            file_name=f"Reporte_{nombre_h.replace(' ', '_')}.docx",
+                            file_name=f"Reporte_{actor_nombre_in.replace(' ', '_')}.docx",
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                         )
                     else:
-                        st.warning(f"La hoja '{hoja_sel}' no contiene notas registradas.")
+                        st.warning("El archivo no contiene notas válidas registradas.")
+                except Exception as e:
+                    st.error(f"Error procesando el archivo: {str(e)}")
 
-        else:
-            if st.button("Generar y Descargar TODAS las Hojas en .ZIP", type="primary"):
-                with st.spinner("Generando reportes individuales para todas las hojas con IA..."):
-                    zip_buffer = io.BytesIO()
-                    cnt_generados = 0
-                    
-                    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                        for h_key in hojas_disponibles:
-                            df_h = dict_hojas[h_key]
-                            if 'Menu' in df_h.columns and len(df_h['Menu'].dropna()) > 0:
-                                nombre_h = str(df_h['Menu'].dropna().iloc[0]).strip()
-                            else:
-                                nombre_h = h_key
+else:
+    # Medios Tradicionales / Portales (Multiple Hojas Hanakuá)
+    uploaded_file = st.file_uploader(
+        "Sube tu archivo Excel de Medios Tradicionales (con múltiples candidatos/hojas)",
+        type=["xlsx", "xls"]
+    )
 
-                            buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes)
-                            if buf is not None:
-                                doc_bytes = buf.getvalue()
-                                fname = f"Reporte_{nombre_h.replace(' ', '_')}.docx"
-                                zip_file.writestr(fname, doc_bytes)
-                                cnt_generados += 1
+    if uploaded_file:
+        try:
+            dict_hojas = cargar_archivo_seguro(uploaded_file)
+            hojas_disponibles = list(dict_hojas.keys())
+            
+            st.subheader("Hojas / Candidatos detectados en el archivo:")
+            st.write(", ".join(hojas_disponibles))
 
-                    zip_buffer.seek(0)
-                    if cnt_generados > 0:
-                        st.success(f"¡Se generaron con éxito {cnt_generados} reportes individuales!")
-                        st.download_button(
-                            label="📦 Descargar Archivo .ZIP con TODOS los Reportes",
-                            data=zip_buffer,
-                            file_name="Reportes_Monitoreo_Completos.zip",
-                            mime="application/zip"
-                        )
-                    else:
-                        st.warning("No se encontraron hojas con notas activas para generar los reportes.")
+            modo = st.radio(
+                "Selecciona la modalidad de descarga:",
+                ["Generar un Candidato Específico", "Generar TODOS los Candidatos en un archivo .ZIP (Masivo)"],
+                index=0
+            )
 
-    except Exception as e:
-        st.error(f"Error procesando el archivo: {str(e)}")
+            if modo == "Generar un Candidato Específico":
+                hoja_sel = st.selectbox("Selecciona la hoja a procesar:", hojas_disponibles)
+                if st.button("Generar Reporte de esta Hoja", type="primary"):
+                    with st.spinner("Analizando publicaciones con IA..."):
+                        df_h = dict_hojas[hoja_sel]
+                        if 'Menu' in df_h.columns and len(df_h['Menu'].dropna()) > 0:
+                            nombre_h = str(df_h['Menu'].dropna().iloc[0]).strip()
+                        else:
+                            nombre_h = hoja_sel
+
+                        buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False)
+                        if buf is not None:
+                            st.success(f"¡Reporte generado exitosamente para '{nombre_h}'!")
+                            st.download_button(
+                                label=f"📥 Descargar Reporte Word de {nombre_h}",
+                                data=buf,
+                                file_name=f"Reporte_{nombre_h.replace(' ', '_')}.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            )
+                        else:
+                            st.warning(f"La hoja '{hoja_sel}' no contiene notas registradas.")
+
+            else:
+                if st.button("Generar y Descargar TODOS los Reportes en .ZIP", type="primary"):
+                    with st.spinner("Generando reportes individuales para todas las hojas con IA..."):
+                        zip_buffer = io.BytesIO()
+                        cnt_generados = 0
+                        
+                        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                            for h_key in hojas_disponibles:
+                                df_h = dict_hojas[h_key]
+                                if 'Menu' in df_h.columns and len(df_h['Menu'].dropna()) > 0:
+                                    nombre_h = str(df_h['Menu'].dropna().iloc[0]).strip()
+                                else:
+                                    nombre_h = h_key
+
+                                buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False)
+                                if buf is not None:
+                                    doc_bytes = buf.getvalue()
+                                    fname = f"Reporte_{nombre_h.replace(' ', '_')}.docx"
+                                    zip_file.writestr(fname, doc_bytes)
+                                    cnt_generados += 1
+
+                        zip_buffer.seek(0)
+                        if cnt_generados > 0:
+                            st.success(f"¡Se generaron con éxito {cnt_generados} reportes individuales!")
+                            st.download_button(
+                                label="📦 Descargar Archivo .ZIP con TODOS los Reportes",
+                                data=zip_buffer,
+                                file_name="Reportes_Monitoreo_Completos.zip",
+                                mime="application/zip"
+                            )
+                        else:
+                            st.warning("No se encontraron hojas con notas activas para generar los reportes.")
+
+        except Exception as e:
+            st.error(f"Error procesando el archivo: {str(e)}")
