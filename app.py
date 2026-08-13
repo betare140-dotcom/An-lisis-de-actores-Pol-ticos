@@ -1,4 +1,4 @@
-import io
+ import io
 import os
 import re
 import zipfile
@@ -150,7 +150,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     if len(df_filtrado) == 0:
         return None
 
-    # Formato strictly Día.Mes.Año (ej. 07.08.26 para 7 de agosto)
+    # Formato strictly Día.Mes.Año (ej. 07.08.26)
     df_filtrado["fecha_str"] = df_filtrado["fecha_dt"].dt.strftime("%d.%m.%2y")
 
     fechas_validas = df_filtrado["fecha_dt"]
