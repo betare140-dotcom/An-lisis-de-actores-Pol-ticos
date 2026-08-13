@@ -13,7 +13,6 @@ from docx.shared import Inches, Pt, RGBColor
 import pandas as pd
 import streamlit as st
 
-# Diccionario de meses en español
 MESES_ES = {
     1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
     7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
@@ -31,12 +30,10 @@ st.write(
     "con clasificación de IA."
 )
 
-# API Key Pre-integrada
 GEMINI_API_KEY = "AQ.Ab8RN6LoOHgBblHSIETp2LjyBofO48YsSqSeojXYFAAKGvFa0w"
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
-# FUNCIÓN DE CARGA SEGURO EN CASCADA
 def cargar_archivo_seguro(file):
     try:
         return pd.read_excel(file, sheet_name=None)
@@ -57,11 +54,7 @@ def cargar_archivo_seguro(file):
     except Exception:
         pass
 
-    raise Exception(
-        "No se pudo leer el archivo. "
-        "Asegúrate de que sea un archivo Excel (.xlsx/.xls) "
-        "o CSV válido."
-    )
+    raise Exception("No se pudo leer el archivo. Asegúrate de que sea un archivo Excel (.xlsx/.xls) o CSV válido.")
 
 def obtener_campo(row, lista_cols):
     for c in lista_cols:
@@ -94,7 +87,6 @@ def parsear_fecha_perfecta(val):
         s = s.split(",")[0].strip()
     s_date = s.split(" ")[0].strip()
 
-    # Caso YYYY-MM-DD
     if "-" in s_date:
         try:
             parts = s_date.split("-")
@@ -103,7 +95,6 @@ def parsear_fecha_perfecta(val):
         except Exception:
             pass
 
-    # Caso DD/MM/YYYY (fuerza Día primero)
     if "/" in s_date:
         try:
             parts = s_date.split("/")
@@ -111,9 +102,7 @@ def parsear_fecha_perfecta(val):
                 if len(parts[0]) == 4:
                     return datetime(int(parts[0]), int(parts), int(parts))
                 else:
-                    d = int(parts[0])
-                    m = int(parts)
-                    y = int(parts)
+                    d, m, y = int(parts[0]), int(parts), int(parts)
                     if y < 100: y += 2000
                     return datetime(y, m, d)
         except Exception:
@@ -435,7 +424,8 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                     autor = obtener_campo(row, ["Autor", "Author name", "Fuente", "Media name", "Programa"])
                     handle = obtener_campo(row, ["Author handle (@username)", "Handle", "Username"])
                     detalle = obtener_campo(row, ["Contenido", "Detail", "Summary", "Síntesis", "Titulo", "Title"])
-                    link = obtener_campo(row, ["URL", "Link de Nota", "Link", "Enlace"])
+                    # PRIORIDAD A 'Link URL Medio'
+                    link = obtener_campo(row, ["Link URL Medio", "URL", "Link de Nota", "Link", "Enlace"])
 
                     p_a = doc.add_paragraph()
                     p_a.paragraph_format.space_before = Pt(4)
@@ -466,7 +456,8 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                         medio = obtener_campo(row, ["Nombre del Medio", "Fuente", "Media name"])
                         autor = obtener_campo(row, ["Autor", "Author name", "Programa"])
                         titulo = obtener_campo(row, ["Titulo", "Contenido", "Detail", "Summary"])
-                        link = obtener_campo(row, ["Link de Nota", "URL", "Link"])
+                        # PRIORIDAD A 'Link URL Medio'
+                        link = obtener_campo(row, ["Link URL Medio", "URL", "Link de Nota", "Link", "Enlace"])
 
                         p_a = doc.add_paragraph()
                         p_a.paragraph_format.space_before = Pt(4)
@@ -493,7 +484,8 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                 medio = obtener_campo(row, ["Nombre del Medio", "Fuente", "Media name"])
                 autor = obtener_campo(row, ["Autor", "Author name", "Programa"])
                 titulo = obtener_campo(row, ["Titulo", "Contenido", "Detail", "Summary"])
-                link = obtener_campo(row, ["Link de Nota", "URL", "Link"])
+                # PRIORIDAD A 'Link URL Medio'
+                link = obtener_campo(row, ["Link URL Medio", "URL", "Link de Nota", "Link", "Enlace"])
 
                 p_a = doc.add_paragraph()
                 p_a.paragraph_format.space_before = Pt(4)
@@ -557,7 +549,6 @@ if tipo_analisis == "Redes Sociales":
                     st.error(f"Error procesando el archivo: {str(e)}")
 
 else:
-    # Medios Tradicionales / Portales (Multiple Hojas Hanakuá)
     uploaded_file = st.file_uploader(
         "Sube tu archivo Excel de Medios Tradicionales (con múltiples candidatos/hojas)",
         type=["xlsx", "xls"]
