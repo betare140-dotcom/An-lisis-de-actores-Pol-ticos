@@ -78,7 +78,8 @@ def obtener_columna_serie(df_data, lista_posibles_cols):
                 return df_data[col_existente]
     return pd.Series([""] * len(df_data), index=df_data.index)
 
-def parsear_fecha_todas_las_formas(val):
+# PARSER ESTRUCTURADO PARA GARANTIZAR DÍA, MES Y AÑO (DD.MM.YY)
+def parsear_fecha_estricta_dia_mes_anio(val):
     if not val or pd.isna(val) or str(val) == "nan":
         return pd.NaT
     s = str(val).strip()
@@ -86,11 +87,23 @@ def parsear_fecha_todas_las_formas(val):
         s = s.split(',')[0].strip()
     s_date = s.split(' ')[0].strip()
     
+    # Caso YYYY-MM-DD
     if '-' in s_date:
         try:
             parts = s_date.split('-')
             if len(parts) == 3 and len(parts[0]) == 4:
                 return datetime(int(parts[0]), int(parts), int(parts))
+        except Exception:
+            pass
+
+    # Caso DD/MM/YYYY (fuerza a leer el primer número como DÍA)
+    if '/' in s_date:
+        try:
+            parts = s_date.split('/')
+            if len(parts) == 3:
+                d, m, y = int(parts[0]), int(parts), int(parts)
+                if y < 100: y += 2000
+                return datetime(y, m, d)
         except Exception:
             pass
 
@@ -129,14 +142,15 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     if len(df_filtrado) == 0 or 'sin notas' in str(df_filtrado.iloc[0].values).lower():
         return None
 
-    # Mapeo y orden cronológico de fechas
+    # Parseo estricto Día/Mes/Año y ordenamiento por objeto datetime
     serie_fechas_raw = obtener_columna_serie(df_filtrado, ["Publish date", "Fecha", "Date", "Fecha de publicación"])
-    df_filtrado["fecha_dt"] = serie_fechas_raw.apply(parsear_fecha_todas_las_formas)
+    df_filtrado["fecha_dt"] = serie_fechas_raw.apply(parsear_fecha_estricta_dia_mes_anio)
     df_filtrado = df_filtrado.dropna(subset=["fecha_dt"]).sort_values(by="fecha_dt", ascending=True)
 
     if len(df_filtrado) == 0:
         return None
 
+    # Formato strictly Día.Mes.Año (ej. 07.08.26 para 7 de agosto)
     df_filtrado["fecha_str"] = df_filtrado["fecha_dt"].dt.strftime("%d.%m.%2y")
 
     fechas_validas = df_filtrado["fecha_dt"]
