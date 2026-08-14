@@ -27,7 +27,7 @@ st.set_page_config(
 st.title("📊 Generador de Monitoreo de Actores Políticos")
 st.write(
     "Sube tu reporte para generar los informes oficiales en Word "
-    "con extracción automática de datos y temas reales."
+    "con calibración institucional de IA y extracción de temas reales."
 )
 
 # API Key Pre-integrada
@@ -140,15 +140,35 @@ def clasificar_con_ia(row, actor_nombre_target):
     if not detalle:
         return "NEUTRA"
 
+    # Prompt calibrado con los criterios oficiales de los reportes semanales
     prompt = f"""
-ROL: Analista de comunicación política.
-Determina el sentimiento para el actor "{actor_nombre_target}".
-Categorías: POSITIVA, NEUTRA o NEGATIVA.
+ROL: Analista experto en comunicación política y monitoreo institucional en el Estado de Puebla.
+Determina el impacto reputacional para el actor político: "{actor_nombre_target}".
 
-TEXTO:
+============================================================
+CRITERIOS Y EJEMPLOS DE ENTRENAMIENTO (BASADOS EN REPORTES OFICIALES):
+============================================================
+
+1. POSITIVA / INFORMATIVA:
+   - Entrega de apoyos sociales, alimentarios o de salud (ej. 'Con Rumbo a una Mejor Nutrición', 'Cambiando Vidas', medicamentos, pañales, desayunadores escolares).
+   - Obras públicas, infraestructura, reforestación, pavimentación y convenios de colaboración (ej. CANACO, CANACOPE, 'Terra Equus', hermanamientos turísticos).
+   - Eventos culturales, deportivos y turísticos (ej. 'Feria del Queso en Tonantzintla', 'Corre por las Juventudes', 'Noche de Museos', 'Gala de Estrellas').
+   - Informes de labores, rendición de cuentas y datos favorables de gestión (ej. 'reducción del 9% en incidencia delictiva', 'inversión histórica').
+   - Cobertura de encuestas o procesos internos donde se menciona su posicionamiento político.
+
+2. NEGATIVA / CRÍTICA:
+   - Inseguridad y delitos en el municipio (ej. cristalazos, robo de autopartes en restaurantes, homicidios, asaltos a negocios o bancos).
+   - Protestas, bloqueos vecinales y reclamos por predios expropiados o falta de atención de servicios (ej. cierre de la 14 Oriente / 5 de Mayo, quejas por socavones).
+   - Señalamientos de corrupción, desvío de recursos u observaciones de la Auditoría Superior del Estado (ASE).
+   - Denuncias de censura, confrontaciones con periodistas o acusaciones de nepotismo / acaparamiento de candidaturas para 2027.
+   - Controversias por permisos comerciales o proyectos estatales en su territorio (ej. conflicto por obras del Cablebús, clausuras).
+
+============================================================
+TEXTO A EVALUAR:
 "{detalle}"
+============================================================
 
-Responde ÚNICAMENTE: POSITIVA, NEUTRA o NEGATIVA.
+Responde ÚNICAMENTE con una de las tres palabras: POSITIVA, NEUTRA o NEGATIVA.
 """
     try:
         res = model.generate_content(prompt).text.strip().upper()
@@ -554,12 +574,12 @@ if tipo_analisis == "Redes Sociales":
     )
     actor_nombre_in = st.text_input(
         "Nombre y Partido del Actor Político",
-        placeholder="ej. LAURA ARTEMISA GARCÍA CHÁVEZ (MORENA)",
+        placeholder="ej. GUADALUPE CUAUTLE TORRES (PAN)",
     ).strip().upper()
 
     if uploaded_file and actor_nombre_in:
         if st.button("Generar Reporte Oficial", type="primary"):
-            with st.spinner("Analizando publicaciones con IA..."):
+            with st.spinner("Analizando publicaciones con IA calibrada..."):
                 try:
                     dict_h = cargar_archivo_seguro(uploaded_file)
                     df_redes = list(dict_h.values())[0]
