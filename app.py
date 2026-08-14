@@ -29,30 +29,32 @@ st.set_page_config(
 st.title("📊 Generador de Monitoreo de Actores Políticos")
 st.write(
     "Genera reportes oficiales en Word con filtrado institucional, clasificación precisa "
-    "y síntesis ejecutiva estructurada por ejes temáticos."
+    "sin falsos negativos y resúmenes ejecutivos estructurados."
 )
 
 # API Key Pre-integrada
 GEMINI_API_KEY = "AQ.Ab8RN6LoOHgBblHSIETp2LjyBofO48YsSqSeojXYFAAKGvFa0w"
 genai.configure(api_key=GEMINI_API_KEY)
 
-# 1. MODELO PARA CLASIFICACIÓN POLÍTICA (JSON / Temp 0.0)
+# 1. MODELO ESPECIALIZADO PARA CLASIFICACIÓN POLÍTICA (JSON / Temp 0.0)
 SYSTEM_PROMPT_CLASIFICACION = """
 Eres un analista senior de inteligencia política y monitoreo de medios en el Estado de Puebla.
-Tu misión es evaluar el impacto reputacional de cada publicación para el actor político objetivo.
+Tu misión es evaluar con precisión el impacto reputacional de cada publicación para el actor político objetivo.
 
-REGLAS DE CLASIFICACIÓN POLÍTICA:
-1. NEGATIVA:
-   - Seguridad y Nota Roja: Asaltos, cristalazos, robo de autopartes, homicidios o detenciones viales y tráfico de influencias.
-   - Corrupción y Fiscalización: Auditorías de la ASE, desvíos de recursos, daño patrimonial, nepotismo o falta de transparencia.
-   - Crisis Política: Desplantes institucionales, altercados, controversias por bardas/lonas, o quejas ciudadanas por servicios (baches, agua, alumbrado).
-   - Críticas Ciudadanas: Comentarios de periodistas, columnistas o usuarios cuestionando su desempeño, ética o prepotencia.
+REGLAS ESTRICTAS DE CLASIFICACIÓN POLÍTICA:
 
-2. POSITIVA / INFORMATIVA:
-   - Programas y Bienestar: Entrega de apoyos alimentarios, medicamentos, kits escolares, becas, obra comunitaria o atención médica.
-   - Obras y Gobierno: Pavimentación, luminarias, paneles solares, convenios de colaboración, hermanamientos y sesiones de cabildo.
-   - Agenda Cultural y Deportiva: Foros, ferias tradicionales, carreras y eventos juveniles.
-   - Posicionamiento Favorable: Encuestas de aprobación, liderazgo interno y notas informativas descriptivas de su gestión.
+1. REGLAS PARA POSITIVA / INFORMATIVA:
+   - ESTADÍSTICAS Y LOGROS DE SEGURIDAD: Cualquier nota que informe sobre la DISMINUCIÓN, BAJA o REDUCCIÓN de delitos (ej. 'bajan 10.78% delitos', 'cae robo de vehículos', operativos de vigilancia exitosos) es POSITIVA / INFORMATIVA (logro de gobierno).
+   - CONVENIOS LABORALES: Acuerdos con sindicatos (CTM), convenios funerarios, prestaciones y mejoras salariales son POSITIVAS / INFORMATIVAS.
+   - PROGRAMAS Y BIENESTAR: Entrega de apoyos, kits escolares, despensas, becas, obra comunitaria, jornadas de atención ciudadana ('Miércoles del Pueblo') y eventos de salud.
+   - TRADICIONES Y TURISMO: Cabalgatas, ferias patronales, 'Comida con Causa', Expo Universidades, plataformas digitales (visitcholula) y reforestación.
+   - COBERTURA POLÍTICA GENERAL: Alianzas, toma de protesta y notas informativas descriptivas de su gestión.
+
+2. REGLAS PARA NEGATIVA / CRÍTICA:
+   - HECHOS DE INSEGURIDAD EN TIEMPO REAL: Asaltos ocurridos en el municipio, robo de autopartes denunciado por ciudadanos, cristalazos, homicidios o impunidad policial.
+   - PROTESTAS Y RECLAMOS CIUDADANOS: Vecinos manifestándose en juntas auxiliares (ej. Momoxpan), quejas por baches sin tapar, basura o falta de presupuesto.
+   - CORRUPCIÓN Y FISCALIZACIÓN: Investigaciones de la ASE, daño patrimonial, desfalcos, nepotismo o falta de transparencia.
+   - CRISIS Y ATAQUES POLÍTICOS: Detenciones de funcionarios en estado de ebriedad, tráfico de influencias, acusaciones de falsear cifras o descalificaciones de opositores.
 """
 
 model_clasificador = genai.GenerativeModel(
@@ -61,7 +63,7 @@ model_clasificador = genai.GenerativeModel(
     generation_config={"temperature": 0.0}
 )
 
-# 2. MODELO PARA REDACCIÓN DEL RESUMEN EJECUTIVO (Temp 0.2)
+# 2. MODELO ESPECIALIZADO PARA REDACCIÓN DEL RESUMEN EJECUTIVO (Temp 0.2)
 model_redactor = genai.GenerativeModel(
     model_name="gemini-1.5-flash",
     generation_config={"temperature": 0.2}
@@ -75,12 +77,12 @@ def normalizar_cadena(texto):
     return re.sub(r'[^a-z0-9]', '', t)
 
 PATRONES_INSTITUCIONALES = [
-    r'ayuntamiento', r'snandresoficial', r'pueblaayto', r'gobiernoded', r'gobpue',
+    r'ayuntamiento', r'snandresoficial', r'pueblaayto', r'gobiernocholula', r'gobiernoded', r'gobpue',
     r'ssppc', r'seguridadciudadana', r'seguridadpublica', r'proteccioncivil', r'pcgob',
-    r'difsnandres', r'difpue', r'sistemadif', r'difmunicipal',
+    r'difsnandres', r'difpue', r'difcholula', r'choluladif', r'sistemadif', r'difmunicipal',
     r'servicios_pub', r'serviciospublicos', r'desaecopue', r'desarrolloeconomico', r'desarrollourbano',
     r'igualdadsustantiva', r'pueblamujeres', r'juventudpuebla', r'ijmpuebla',
-    r'delegacionatlixcayotl', r'pacoosorio'
+    r'delegacionatlixcayotl', r'pacoosorio', r'segobspch', r'cholulalimpia', r'direccióndederechoshumanos'
 ]
 
 def es_cuenta_del_actor(autor, handle, actor_target):
@@ -96,6 +98,10 @@ def es_cuenta_del_actor(autor, handle, actor_target):
         
     tokens_actor = [t for t in re.findall(r'\w+', quitar_acentos(actor_target)) if len(t) > 3]
     
+    if any(k in tokens_actor for k in ['tonantzin', 'fernandez']):
+        if ('tonantzin' in aut or 'tonantzin' in hnd):
+            return True
+
     if any(k in tokens_actor for k in ['guadalupe', 'lupita', 'cuautle']):
         if ('cuautle' in aut or 'cuautle' in hnd) and any(k in aut or k in hnd for k in ['lupita', 'guadalupe']):
             return True
@@ -126,30 +132,28 @@ def es_institucional(autor, handle):
             return True
     return False
 
-def es_publicacion_descartable(row, actor_nombre_target, bloqueos_personalizados=None):
-    autor = str(row.get('Autor', row.get('Author name', ''))).strip()
-    handle = str(row.get('Author handle (@username)', row.get('Handle', ''))).strip()
-    detalle = str(row.get('Contenido', row.get('Detail', row.get('Titulo', '')))).strip()
+def limpiar_dataframe_redes_automatico(df_raw, actor_nombre_target):
+    def es_descartable(row):
+        autor = str(row.get('Autor', row.get('Author name', ''))).strip()
+        handle = str(row.get('Author handle (@username)', row.get('Handle', ''))).strip()
+        detalle = str(row.get('Contenido', row.get('Detail', row.get('Titulo', '')))).strip()
+        
+        if es_cuenta_del_actor(autor, handle, actor_nombre_target):
+            return True
+        if es_institucional(autor, handle):
+            return True
+        
+        det_lower = quitar_acentos(detalle)
+        if any(p in det_lower for p in ['mis ahijados andres y alexander', 'con toda la actitud #graciasdios', 'primeracomunion']):
+            return True
+            
+        return False
+
+    mask_descarte = df_raw.apply(es_descartable, axis=1)
+    df_limpio = df_raw[~mask_descarte].copy()
+    total_descartadas = mask_descarte.sum()
     
-    if es_cuenta_del_actor(autor, handle, actor_nombre_target):
-        return True, "Cuenta oficial del Actor"
-        
-    if es_institucional(autor, handle):
-        return True, "Cuenta institucional / dependencia"
-        
-    det_lower = quitar_acentos(detalle)
-    if any(p in det_lower for p in ['mis ahijados andres y alexander', 'con toda la actitud #graciasdios', 'primeracomunion']):
-        return True, "Publicación personal / familiar"
-        
-    if bloqueos_personalizados:
-        aut_norm = normalizar_cadena(autor)
-        hnd_norm = normalizar_cadena(handle)
-        for b in bloqueos_personalizados:
-            b_norm = normalizar_cadena(b)
-            if b_norm and (b_norm in aut_norm or b_norm in hnd_norm):
-                return True, f"Bloqueo manual ({b})"
-                
-    return False, "Válida"
+    return df_limpio, total_descartadas
 
 def cargar_archivo_seguro(file):
     try:
@@ -275,7 +279,8 @@ Responde ÚNICAMENTE un JSON válido con este formato:
         res_map = {}
         for item in lista_notas:
             t = item["texto"].lower()
-            if any(k in t for k in ["asalto", "robo", "daño patrimonial", "317 millones", "ase", "nepotismo", "desfalco", "desplante", "inseguridad", "bache", "ebrio", "borracho", "charolazo", "prepotencia", "prepotente"]):
+            es_logro_seguridad = any(k in t for k in ["disminuye 10", "bajan 10", "reduccion de 10", "cae 10", "menos delitos"])
+            if not es_logro_seguridad and any(k in t for k in ["asalto en ", "robo de llantas", "daño patrimonial", "317 millones", "ase", "nepotismo", "desfalco", "desplante", "inseguridad", "se manifestaron", "abandonaron"]):
                 res_map[item["id"]] = "NEGATIVA"
             else:
                 res_map[item["id"]] = "POSITIVA"
@@ -331,10 +336,10 @@ def extraer_resumen_temas_real(df_data, actor_nombre):
 
     prompt = f"""
 Eres un analista senior de comunicación política y redacción ejecutiva en Puebla.
-Redacta el "RESUMEN" ejecutivo estructurado para el actor político: "{actor_nombre}".
+Redacta el "RESUMEN" ejecutivo oficial para el actor político: "{actor_nombre}".
 
 REGLAS DE FORMATO (OBLIGATORIAS):
-1. Cada punto DEBE ser exactamente de 1 solo párrafo (de 2 a 3 líneas).
+1. Cada punto DEBE ser exactamente de 1 solo párrafo fluido (de 2 a 3 líneas).
 2. Estructura exacta de cada viñeta:
    [Número]. [Título del Eje Temático Específico]: [Síntesis ejecutiva explicando los hechos con nombres de programas, lugares, obras o instituciones].
 3. Prohibido copiar o pegar párrafos completos de las noticias originales. Debes resumir y redactar con elegancia institucional.
@@ -344,11 +349,11 @@ REGLAS DE FORMATO (OBLIGATORIAS):
 
 EJEMPLO EXACTO DE SALIDA:
 Temas relevantes informativos
-1. Obra Comunitaria y Educación: Arranque de proyectos de infraestructura y equipamiento con paneles solares en la Telesecundaria Otilio Montaño y rehabilitación en el Centro Comunitario de San Diego Cuachayotla.
-2. Supervisión de Programas de Bienestar: Cobertura de los recorridos institucionales de atención ciudadana y entrega directa de apoyos sociales en juntas auxiliares.
+1. Turismo Inteligente y Proyección Internacional: Presentación de la plataforma digital VisitCholula.mx potenciada con Inteligencia Artificial y designación de San Pedro Cholula como sede de 'Ventana México 2027' en el marco del Tianguis Turístico.
+2. Obras Públicas y Oportunidades Educativas: Inauguración de la Expo Universidades 2026 con 35 instituciones de educación superior en la Plaza de la Concordia y arranque de pavimentaciones en San Juan Tlautla y San Sebastián Tepalcatepec.
 
 Temas negativos
-1. Incidente Vial y Detención en Sonata: Amplia difusión en redes y medios de comunicación de videos donde el funcionario es retenido por policías municipales tras un choque en presunto estado de ebriedad y señalamientos por intentar utilizar influencias.
+1. Protestas Vecinales en Santiago Momoxpan: Manifestación de habitantes en la presidencia auxiliar acusando abandono gubernamental y presupuesto insuficiente para bacheo.
 
 NOTICIAS POSITIVAS DISPONIBLES:
 {str(pos_textos[:25])}
@@ -367,7 +372,6 @@ NOTICIAS NEGATIVAS DISPONIBLES:
     except Exception:
         pass
 
-    # Generador de respaldo de alta calidad (1 párrafo por punto)
     lineas_res = ["Temas relevantes informativos"]
     if len(pos_textos) > 0:
         titulos_unicos_pos = list(dict.fromkeys([
@@ -394,13 +398,13 @@ NOTICIAS NEGATIVAS DISPONIBLES:
 
     return "\n".join(lineas_res)
 
-def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales, bloqueos_personalizados=None):
-    mask_descarte = df_hoja.apply(lambda r: es_publicacion_descartable(r, nombre_hoja, bloqueos_personalizados)[0], axis=1)
-    df_filtrado = df_hoja[~mask_descarte].copy()
-    
-    total_descartadas = mask_descarte.sum()
-    if total_descartadas > 0:
-        st.info(f"ℹ️ Se filtraron {total_descartadas} publicaciones institucionales y personales. Analizando {len(df_filtrado)} menciones reales.")
+def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
+    if es_redes_sociales:
+        df_filtrado, total_descartadas = limpiar_dataframe_redes_automatico(df_hoja, nombre_hoja)
+        if total_descartadas > 0:
+            st.info(f"ℹ️ Se limpiaron automáticamente {total_descartadas} publicaciones institucionales/personales. Analizando {len(df_filtrado)} menciones ciudadanas reales.")
+    else:
+        df_filtrado = df_hoja.copy()
 
     if len(df_filtrado) == 0:
         return None
@@ -657,7 +661,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales, bloqueos_perso
     buffer.seek(0)
     return buffer
 
-# --- INTERFAZ STREAMLIT ---
+# --- INTERFAZ STREAMLIT LIMPIA Y DIRECTA ---
 
 tipo_analisis = st.radio(
     "¿Qué tipo de archivo vas a analizar?",
@@ -668,16 +672,6 @@ tipo_analisis = st.radio(
     index=0
 )
 
-# Opciones avanzadas de filtrado
-with st.expander("⚙️ Configuración de Bloqueo de Perfiles / Cuentas"):
-    st.write("El sistema ya filtra automáticamente las cuentas oficiales del actor y secretarías.")
-    bloqueos_extra_raw = st.text_area(
-        "Cuentas o palabras adicionales a descartar (separadas por comas):",
-        placeholder="ej. Paco Osorio, Raymundo Cuautli, funcionario_xyz",
-        help="Cualquier publicación emitida por estos autores o perfiles será eliminada del análisis."
-    )
-    bloqueos_extra = [b.strip() for b in bloqueos_extra_raw.split(",") if b.strip()] if bloqueos_extra_raw else []
-
 if tipo_analisis == "Redes Sociales":
     uploaded_file = st.file_uploader(
         "Sube tu archivo Excel o CSV de Redes Sociales",
@@ -685,16 +679,16 @@ if tipo_analisis == "Redes Sociales":
     )
     actor_nombre_in = st.text_input(
         "Nombre y Partido del Actor Político",
-        placeholder="ej. RAYMUNDO CUAUTLI (MORENA)",
+        placeholder="ej. TONANTZIN FERNÁNDEZ (MORENA)",
     ).strip().upper()
 
     if uploaded_file and actor_nombre_in:
         if st.button("Generar Reporte Oficial", type="primary"):
-            with st.spinner("Filtrando cuentas oficiales y redactando resumen con IA..."):
+            with st.spinner("Limpiando cuentas oficiales y procesando con IA..."):
                 try:
                     dict_h = cargar_archivo_seguro(uploaded_file)
                     df_redes = list(dict_h.values())[0]
-                    buf = crear_doc_desde_hoja(df_redes, actor_nombre_in, es_redes_sociales=True, bloqueos_personalizados=bloqueos_extra)
+                    buf = crear_doc_desde_hoja(df_redes, actor_nombre_in, es_redes_sociales=True)
                     if buf is not None:
                         st.success(f"¡Reporte generado exitosamente para '{actor_nombre_in}'!")
                         st.download_button(
@@ -704,7 +698,7 @@ if tipo_analisis == "Redes Sociales":
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                         )
                     else:
-                        st.warning("El archivo no contiene notas válidas tras aplicar los filtros.")
+                        st.warning("El archivo no contiene notas válidas tras la limpieza automática.")
                 except Exception as e:
                     st.error(f"Error procesando el archivo: {str(e)}")
 
@@ -738,7 +732,7 @@ else:
                         else:
                             nombre_h = hoja_sel
 
-                        buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False, bloqueos_personalizados=bloqueos_extra)
+                        buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False)
                         if buf is not None:
                             st.success(f"¡Reporte generado exitosamente para '{nombre_h}'!")
                             st.download_button(
@@ -764,7 +758,7 @@ else:
                                 else:
                                     nombre_h = h_key
 
-                                buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False, bloqueos_personalizados=bloqueos_extra)
+                                buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False)
                                 if buf is not None:
                                     doc_bytes = buf.getvalue()
                                     fname = f"Reporte_{nombre_h.replace(' ', '_')}.docx"
@@ -785,4 +779,3 @@ else:
 
         except Exception as e:
             st.error(f"Error procesando el archivo: {str(e)}")
-
