@@ -28,7 +28,7 @@ st.set_page_config(
 st.title("📊 Generador de Monitoreo de Actores Políticos")
 st.write(
     "Sube tu reporte para generar los informes oficiales en Word "
-    "con clasificación de IA."
+    "con clasificación de IA o con los sentimientos de tu archivo original."
 )
 
 # API Key Pre-integrada
@@ -163,11 +163,10 @@ La prioridad absoluta es detectar TODA publicación que pueda afectar negativame
 CATEGORÍAS
 ============================================================
 POSITIVA / INFORMATIVA:
-Clasifica como POSITIVA cuando la publicación presenta favorablemente al actor político, su gobierno, administración, acciones o resultados (inauguraciones, programas sociales, apoyos, respaldo, avances).
+Clasifica como POSITIVA cuando la publicación presenta favorablemente al actor político, su gobierno, administración, acciones o resultados.
 
 NEUTRA / INFORMATIVA:
 Clasifica como NEUTRA cuando la publicación simplemente informa sobre un hecho descriptivo sin afectar ni favorecer la imagen del actor político.
-- Reportes policíacos, accidentes o sucesos generales que no responsabilizan al actor = NEUTRA.
 
 NEGATIVA / CRÍTICA:
 Clasifica como NEGATIVA cuando el contenido afecta DIRECTAMENTE al actor político "{actor_nombre_target}", su administración, gestión, equipo o reputación.
@@ -258,7 +257,7 @@ TEMAS NEGATIVOS:
             "1. No se registraron temas negativos en el periodo analizado."
         )
 
-def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
+def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales, usar_sentimiento_archivo=False):
     pc_mask = df_hoja.apply(
         lambda r: (
             "pcgobpue" in str(r.get("Author handle (@username)", "")).lower()
@@ -302,17 +301,39 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     else:
         periodo_texto = f"{min_d.strftime('%d')} al {max_d.strftime('%d')} de {MESES_ES[max_d.month]} de {max_d.year}"
 
-    sentimientos = []
-    progreso = st.progress(0)
-    total_filas = len(df_filtrado)
+    # ========================================================
+    # CLASIFICACIÓN DE SENTIMIENTO
+    # ========================================================
+    if usar_sentimiento_archivo:
+        # Extraer columna de sentimiento original del Excel
+        col_sentimiento = obtener_columna_serie(
+            df_filtrado, ["Sentimiento", "Sentiment", "Tono", "Calificación", "Impacto"]
+        )
+        
+        def map_sentimiento_local(val):
+            val_str = str(val).strip().upper()
+            if "NEGATIV" in val_str or "CRÍTIC" in val_str or "MAL" in val_str:
+                return "NEGATIVA"
+            else:
+                return "POSITIVA" # Neutras y Positivas cuentan como Positivas
 
-    for i, (_, row) in enumerate(df_filtrado.iterrows()):
-        sentimiento = clasificar_con_ia(row, nombre_hoja)
-        sentimientos.append(sentimiento)
-        progreso.progress((i + 1) / total_filas)
+        df_filtrado["sentimiento_ia"] = col_sentimiento.apply(map_sentimiento_local)
+        
+    else:
+        # Usar la Inteligencia Artificial leyendo nota por nota
+        sentimientos = []
+        progreso = st.progress(0)
+        total_filas = len(df_filtrado)
 
-    df_filtrado["sentimiento_ia"] = sentimientos
-    progreso.empty()
+        for i, (_, row) in enumerate(df_filtrado.iterrows()):
+            sentimiento = clasificar_con_ia(row, nombre_hoja)
+            sentimientos.append(sentimiento)
+            progreso.progress((i + 1) / total_filas)
+
+        df_filtrado["sentimiento_ia"] = sentimientos
+        progreso.empty()
+
+    # ========================================================
 
     positivas_cnt = len(df_filtrado[df_filtrado["sentimiento_ia"].isin(["POSITIVA", "NEUTRA"])])
     negativas_cnt = len(df_filtrado[df_filtrado["sentimiento_ia"] == "NEGATIVA"])
@@ -538,6 +559,17 @@ tipo_analisis = st.radio(
     index=0
 )
 
+metodo_sentimiento = st.radio(
+    "¿Cómo deseas clasificar el sentimiento de las notas?",
+    [
+        "Clasificar con IA (Lee el texto y evalúa el impacto reputacional)",
+        "Extraer del archivo (Usa la columna 'Sentimiento' / 'Tono' y convierte Neutras a Positivas)"
+    ],
+    index=1
+)
+
+usar_sentimiento_archivo = (metodo_sentimiento == "Extraer del archivo (Usa la columna 'Sentimiento' / 'Tono' y convierte Neutras a Positivas)")
+
 if tipo_analisis == "Redes Sociales":
     uploaded_file = st.file_uploader(
         "Sube tu archivo Excel o CSV de Redes Sociales",
@@ -550,11 +582,11 @@ if tipo_analisis == "Redes Sociales":
 
     if uploaded_file and actor_nombre_in:
         if st.button("Generar Reporte Oficial", type="primary"):
-            with st.spinner("Analizando publicaciones con IA..."):
+            with st.spinner("Analizando publicaciones y generando reporte..."):
                 try:
                     dict_h = cargar_archivo_seguro(uploaded_file)
                     df_redes = list(dict_h.values())[0]
-                    buf = crear_doc_desde_hoja(df_redes, actor_nombre_in, es_redes_sociales=True)
+                    buf = crear_doc_desde_hoja(df_redes, actor_nombre_in, es_redes_sociales=True, usar_sentimiento_archivo=usar_sentimiento_archivo)
                     if buf is not None:
                         st.success(f"¡Reporte generado exitosamente para '{actor_nombre_in}'!")
                         st.download_button(
@@ -591,14 +623,14 @@ else:
             if modo == "Generar un Candidato Específico":
                 hoja_sel = st.selectbox("Selecciona la hoja a procesar:", hojas_disponibles)
                 if st.button("Generar Reporte de esta Hoja", type="primary"):
-                    with st.spinner("Analizando publicaciones con IA..."):
+                    with st.spinner("Analizando publicaciones y generando reporte..."):
                         df_h = dict_hojas[hoja_sel]
                         if 'Menu' in df_h.columns and len(df_h['Menu'].dropna()) > 0:
                             nombre_h = str(df_h['Menu'].dropna().iloc[0]).strip()
                         else:
                             nombre_h = hoja_sel
 
-                        buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False)
+                        buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False, usar_sentimiento_archivo=usar_sentimiento_archivo)
                         if buf is not None:
                             st.success(f"¡Reporte generado exitosamente para '{nombre_h}'!")
                             st.download_button(
@@ -612,7 +644,7 @@ else:
 
             else:
                 if st.button("Generar y Descargar TODOS los Reportes en .ZIP", type="primary"):
-                    with st.spinner("Generando reportes individuales para todas las hojas con IA..."):
+                    with st.spinner("Generando reportes individuales para todas las hojas..."):
                         zip_buffer = io.BytesIO()
                         cnt_generados = 0
                         
@@ -624,7 +656,7 @@ else:
                                 else:
                                     nombre_h = h_key
 
-                                buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False)
+                                buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False, usar_sentimiento_archivo=usar_sentimiento_archivo)
                                 if buf is not None:
                                     doc_bytes = buf.getvalue()
                                     fname = f"Reporte_{nombre_h.replace(' ', '_')}.docx"
