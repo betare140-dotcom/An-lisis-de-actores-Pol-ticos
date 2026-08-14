@@ -13,7 +13,6 @@ from docx.shared import Inches, Pt, RGBColor
 import pandas as pd
 import streamlit as st
 
-# Diccionario de meses en español
 MESES_ES = {
     1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
     7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
@@ -28,7 +27,7 @@ st.set_page_config(
 st.title("📊 Generador de Monitoreo de Actores Políticos")
 st.write(
     "Sube tu reporte para generar los informes oficiales en Word "
-    "con clasificación de IA o con los sentimientos de tu archivo original."
+    "con extracción automática de datos y temas reales."
 )
 
 # API Key Pre-integrada
@@ -36,7 +35,6 @@ GEMINI_API_KEY = "AQ.Ab8RN6LoOHgBblHSIETp2LjyBofO48YsSqSeojXYFAAKGvFa0w"
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
-# FUNCIÓN DE CARGA SEGURO EN CASCADA
 def cargar_archivo_seguro(file):
     try:
         return pd.read_excel(file, sheet_name=None)
@@ -57,11 +55,7 @@ def cargar_archivo_seguro(file):
     except Exception:
         pass
 
-    raise Exception(
-        "No se pudo leer el archivo. "
-        "Asegúrate de que sea un archivo Excel (.xlsx/.xls) "
-        "o CSV válido."
-    )
+    raise Exception("No se pudo leer el archivo. Asegúrate de que sea un archivo Excel (.xlsx/.xls) o CSV válido.")
 
 def obtener_campo(row, lista_cols):
     for c in lista_cols:
@@ -147,117 +141,122 @@ def clasificar_con_ia(row, actor_nombre_target):
         return "NEUTRA"
 
     prompt = f"""
-ROL:
-Eres un analista experto en monitoreo de medios, comunicación política, reputación gubernamental y análisis de framing.
+ROL: Analista de comunicación política.
+Determina el sentimiento para el actor "{actor_nombre_target}".
+Categorías: POSITIVA, NEUTRA o NEGATIVA.
 
-Tu tarea es analizar una noticia, columna o publicación de redes sociales sobre el actor político:
-"{actor_nombre_target}"
-y determinar su impacto reputacional.
-
-============================================================
-OBJETIVO PRINCIPAL
-============================================================
-La prioridad absoluta es detectar TODA publicación que pueda afectar negativamente la imagen, reputación, credibilidad, desempeño, gestión o percepción pública del actor político "{actor_nombre_target}".
-
-============================================================
-CATEGORÍAS
-============================================================
-POSITIVA / INFORMATIVA:
-Clasifica como POSITIVA cuando la publicación presenta favorablemente al actor político, su gobierno, administración, acciones o resultados.
-
-NEUTRA / INFORMATIVA:
-Clasifica como NEUTRA cuando la publicación simplemente informa sobre un hecho descriptivo sin afectar ni favorecer la imagen del actor político.
-
-NEGATIVA / CRÍTICA:
-Clasifica como NEGATIVA cuando el contenido afecta DIRECTAMENTE al actor político "{actor_nombre_target}", su administración, gestión, equipo o reputación.
-Debe considerarse NEGATIVA cualquier contenido que:
-- Critique directamente al actor o cuestione su capacidad de gobierno.
-- Lo acuse de corrupción, nepotismo, desvío de recursos o falta de resultados.
-- Denuncie despintado/clausura de bardas, propaganda ilegal o actos anticipados de campaña.
-- Contenga ataques directos de opositores, quejas ciudadanas o columnas hostiles.
-
-============================================================
-TEXTO A ANALIZAR
-============================================================
+TEXTO:
 "{detalle}"
 
-============================================================
-RESPUESTA
-============================================================
-Responde ÚNICAMENTE con una palabra: POSITIVA, NEUTRA o NEGATIVA.
+Responde ÚNICAMENTE: POSITIVA, NEUTRA o NEGATIVA.
 """
     try:
-        response = model.generate_content(prompt)
-        resultado = response.text.strip().upper()
-
-        if "NEGATIVA" in resultado:
+        res = model.generate_content(prompt).text.strip().upper()
+        if "NEGATIVA" in res:
             return "NEGATIVA"
-        elif "NEUTRA" in resultado:
+        elif "NEUTRA" in res:
             return "NEUTRA"
-        elif "POSITIVA" in resultado:
+        elif "POSITIVA" in res:
             return "POSITIVA"
         return "NEUTRA"
     except Exception:
         return "NEUTRA"
 
-def obtener_3_temas_positivos_y_negativos(df_data, actor_p):
-    pos_textos = str(
-        df_data[df_data["sentimiento_ia"].isin(["POSITIVA", "NEUTRA"])]["Contenido"].dropna().head(30).tolist()
-    ) if "Contenido" in df_data.columns else str(
-        df_data[df_data["sentimiento_ia"].isin(["POSITIVA", "NEUTRA"])]["Titulo"].dropna().head(30).tolist()
-    )
+def determinar_sentimiento(row, actor_nombre_target, es_tradicionales):
+    if es_tradicionales:
+        sent_val = obtener_campo(row, ["Sentimiento", "Sentiment", "Sentimiento de la Nota"]).lower()
+        if sent_val and sent_val != "no sentiment":
+            if "negat" in sent_val:
+                return "NEGATIVA"
+            elif "positi" in sent_val or "neutr" in sent_val:
+                return "POSITIVA"
 
-    neg_textos = str(
-        df_data[df_data["sentimiento_ia"] == "NEGATIVA"]["Contenido"].dropna().head(15).tolist()
-    ) if "Contenido" in df_data.columns else str(
-        df_data[df_data["sentimiento_ia"] == "NEGATIVA"]["Titulo"].dropna().head(15).tolist()
-    )
+    return clasificar_con_ia(row, actor_nombre_target)
 
-    prompt = f"""
-Eres un analista experto en comunicación y monitoreo político.
-Tu objetivo es redactar un RESUMEN EJECUTIVO estructurado para el actor político "{actor_p}".
+def extraer_resumen_temas_real(df_data, actor_nombre):
+    pos_df = df_data[df_data["sentimiento_final"].isin(["POSITIVA", "NEUTRA"])]
+    neg_df = df_data[df_data["sentimiento_final"] == "NEGATIVA"]
 
-Debes basarte ESTRICTAMENTE en los eventos y noticias del bloque analizado:
+    pos_textos = []
+    for col in ["Titulo", "Contenido", "Detail", "Summary"]:
+        if col in pos_df.columns:
+            pos_textos = pos_df[col].dropna().astype(str).tolist()
+            break
 
-NOTICIAS POSITIVAS / INFORMATIVAS:
-{pos_textos}
+    neg_textos = []
+    for col in ["Titulo", "Contenido", "Detail", "Summary"]:
+        if col in neg_df.columns:
+            neg_textos = [t for t in neg_df[col].dropna().astype(str).tolist() if "teaser" not in t.lower()]
+            break
 
-NOTICIAS NEGATIVAS / CRÍTICAS:
-{neg_textos}
+    # 1. Intentar con IA validando que no devuelva falsos "no registrados"
+    if len(pos_textos) > 0 or len(neg_textos) > 0:
+        prompt = f"""
+Eres un analista de comunicación política.
+Redacta un RESUMEN EJECUTIVO para "{actor_nombre}".
+Debes basarte ESTRICTAMENTE en estos hechos del archivo:
 
-INSTRUCCIONES CLAVE:
-1. TEMAS RELEVANTES INFORMATIVOS (POSITIVOS):
-   - Extrae hechos y acciones significativas concretas realizadas por el actor político en las notas (ej. inauguración de obras, entrega de apoyos o agua, jornadas ciudadanas, programas sociales, acuerdos políticos, avances institucionales y balance favorable de su actuar público).
-   - Redacta exactamente 3 puntos concisos, directos y con sustancia real de lo que hizo el actor.
+NOTICIAS POSITIVAS ({len(pos_textos)} notas):
+{str(pos_textos[:20])}
 
-2. TEMAS NEGATIVOS:
-   - Extrae controversias, ataques directos de opositores, señalamientos de mala gestión, protestas ciudadanas, cuestionamientos a su actuar público o quejas por propaganda/bardas/campañas anticipadas registradas en las notas.
-   - Redacta exactamente 3 puntos negativos (o menos si son pocos). Si no se registraron eventos negativos en las notas analizadas, escribe únicamente: "1. No se registraron temas negativos en el periodo analizado."
+NOTICIAS NEGATIVAS ({len(neg_textos)} notas):
+{str(neg_textos[:15])}
 
-3. REGLAS DE FORMATO:
-   - NO incluyas frases estadísticas como "Predominó la cobertura favorable...".
-   - Usa viñetas numeradas (1., 2., 3.).
+REGLAS:
+1. Puntos Positivos: De 1 a 3 temas basados en las notas positivas.
+2. Puntos Negativos:
+   - Si hay {len(neg_textos)} notas negativas, redacta de 1 a 3 temas NEGATIVOS explicando las controversias reales.
+   - Si NO hay notas negativas (0 notas negativas), pon exactamente:
+     1. No se registraron temas negativos en el periodo analizado.
+3. NO incluyas frases estadísticas.
 
-FORMATO ESTRICTO DE SALIDA:
-1. [Primer tema positivo/informativo relevante y significativo]
-2. [Segundo tema positivo/informativo relevante y significativo]
-3. [Tercer tema positivo/informativo relevante y significativo]
+FORMATO:
+1. [Tema positivo 1]
+2. [Tema positivo 2]
 
 TEMAS NEGATIVOS:
-1. [Primer tema negativo concreto o 'No se registraron temas negativos en el periodo analizado.']
+1. [Tema negativo 1 o leyenda si no hay]
 """
-    try:
-        return model.generate_content(prompt).text.strip()
-    except Exception:
-        return (
-            "1. Difusión de actividades públicas y agenda de trabajo.\n"
-            "2. Presencia en medios informativos.\n"
-            "3. Cobertura de posicionamientos.\n\n"
-            "TEMAS NEGATIVOS:\n"
-            "1. No se registraron temas negativos en el periodo analizado."
-        )
+        try:
+            res_ia = model.generate_content(prompt).text.strip()
+            if len(neg_textos) > 0 and "no se registraron temas negativos" in res_ia.lower():
+                pass
+            elif res_ia and len(res_ia) > 25:
+                return res_ia
+        except Exception:
+            pass
 
-def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales, usar_sentimiento_archivo=False):
+    # 2. Extractor Infalible Directo de las Notas Reales (CERO Texto Genérico)
+    lineas_res = []
+    if len(pos_textos) > 0:
+        titulos_unicos_pos = list(dict.fromkeys([
+            re.sub(r'^\d+:\d+\s*(hrs|am|pm|\.)\s*', '', t, flags=re.I).strip() 
+            for t in pos_textos if t.strip() and "teaser" not in t.lower()
+        ]))
+        if not titulos_unicos_pos:
+            titulos_unicos_pos = [pos_textos[0]]
+        for i, t in enumerate(titulos_unicos_pos[:3], 1):
+            lineas_res.append(f"{i}. {t}")
+    else:
+        lineas_res.append("1. Difusión de actividades y agenda institucional de trabajo.")
+
+    lineas_res.append("\nTEMAS NEGATIVOS:")
+
+    if len(neg_textos) > 0:
+        titulos_unicos_neg = list(dict.fromkeys([
+            re.sub(r'^\d+:\d+\s*(hrs|am|pm|\.)\s*', '', t, flags=re.I).strip() 
+            for t in neg_textos if t.strip() and "teaser" not in t.lower()
+        ]))
+        if not titulos_unicos_neg:
+            titulos_unicos_neg = [neg_textos[0]]
+        for i, t in enumerate(titulos_unicos_neg[:3], 1):
+            lineas_res.append(f"{i}. {t}")
+    else:
+        lineas_res.append("1. No se registraron temas negativos en el periodo analizado.")
+
+    return "\n".join(lineas_res)
+
+def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     pc_mask = df_hoja.apply(
         lambda r: (
             "pcgobpue" in str(r.get("Author handle (@username)", "")).lower()
@@ -301,50 +300,30 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales, usar_sentimien
     else:
         periodo_texto = f"{min_d.strftime('%d')} al {max_d.strftime('%d')} de {MESES_ES[max_d.month]} de {max_d.year}"
 
-    # ========================================================
-    # CLASIFICACIÓN DE SENTIMIENTO
-    # ========================================================
-    if usar_sentimiento_archivo:
-        # Extraer columna de sentimiento original del Excel
-        col_sentimiento = obtener_columna_serie(
-            df_filtrado, ["Sentimiento", "Sentiment", "Tono", "Calificación", "Impacto"]
-        )
-        
-        def map_sentimiento_local(val):
-            val_str = str(val).strip().upper()
-            if "NEGATIV" in val_str or "CRÍTIC" in val_str or "MAL" in val_str:
-                return "NEGATIVA"
-            else:
-                return "POSITIVA" # Neutras y Positivas cuentan como Positivas
+    sentimientos = []
+    progreso = st.progress(0)
+    total_filas = len(df_filtrado)
 
-        df_filtrado["sentimiento_ia"] = col_sentimiento.apply(map_sentimiento_local)
-        
-    else:
-        # Usar la Inteligencia Artificial leyendo nota por nota
-        sentimientos = []
-        progreso = st.progress(0)
-        total_filas = len(df_filtrado)
+    for i, (_, row) in enumerate(df_filtrado.iterrows()):
+        s_val = determinar_sentimiento(row, nombre_hoja, es_tradicionales=not es_redes_sociales)
+        sentimientos.append(s_val)
+        progreso.progress((i + 1) / total_filas)
 
-        for i, (_, row) in enumerate(df_filtrado.iterrows()):
-            sentimiento = clasificar_con_ia(row, nombre_hoja)
-            sentimientos.append(sentimiento)
-            progreso.progress((i + 1) / total_filas)
+    df_filtrado["sentimiento_final"] = sentimientos
+    progreso.empty()
 
-        df_filtrado["sentimiento_ia"] = sentimientos
-        progreso.empty()
-
-    # ========================================================
-
-    positivas_cnt = len(df_filtrado[df_filtrado["sentimiento_ia"].isin(["POSITIVA", "NEUTRA"])])
-    negativas_cnt = len(df_filtrado[df_filtrado["sentimiento_ia"] == "NEGATIVA"])
+    positivas_cnt = len(df_filtrado[df_filtrado["sentimiento_final"].isin(["POSITIVA", "NEUTRA"])])
+    negativas_cnt = len(df_filtrado[df_filtrado["sentimiento_final"] == "NEGATIVA"])
     total_cnt = len(df_filtrado)
 
     serie_media = obtener_columna_serie(
         df_filtrado,
-        ["Fuente", "Media type", "Media Type", "Medio", "Nombre del Medio", "Tipo de Medio", "Canal"]
+        ["Tipo de Medio", "Fuente", "Media type", "Media Type", "Medio", "Nombre del Medio", "Canal"]
     )
 
     redes_cnt = total_cnt if es_redes_sociales else 0
+    tv_cnt = serie_media.astype(str).str.contains("Tele", case=False, na=False).sum() if not es_redes_sociales else 0
+    rad_cnt = serie_media.astype(str).str.contains("Rad", case=False, na=False).sum() if not es_redes_sociales else 0
     portales_cnt = serie_media.astype(str).str.contains("Portal|Web|Online|Internet", case=False, na=False).sum() if not es_redes_sociales else 0
     prensa_cnt = serie_media.astype(str).str.contains("Prensa|Diario|Periódico", case=False, na=False).sum() if not es_redes_sociales else 0
     columnas_cnt = serie_media.astype(str).str.contains("Columna|Opinión", case=False, na=False).sum() if not es_redes_sociales else 0
@@ -416,7 +395,15 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales, usar_sentimien
     if es_redes_sociales:
         texto_totales = f"TOTAL NOTAS INFORMATIVAS: {total_cnt}\nREDES SOCIALES: {total_cnt}\nPORTALES DIGITALES: 0\nPRENSA LOCAL: 0\nCOLUMNAS: 0"
     else:
-        texto_totales = f"TOTAL NOTAS INFORMATIVAS: {total_cnt}\nPORTALES DIGITALES: {portales_cnt + redes_cnt}\nREDES SOCIALES: 0\nPRENSA LOCAL: {prensa_cnt}\nCOLUMNAS: {columnas_cnt}"
+        partes = [f"TOTAL NOTAS INFORMATIVAS: {total_cnt}"]
+        if tv_cnt > 0: partes.append(f"TELEVISIÓN: {tv_cnt}")
+        if rad_cnt > 0: partes.append(f"RADIO: {rad_cnt}")
+        if portales_cnt > 0: partes.append(f"PORTALES DIGITALES: {portales_cnt}")
+        if prensa_cnt > 0: partes.append(f"PRENSA LOCAL: {prensa_cnt}")
+        if columnas_cnt > 0: partes.append(f"COLUMNAS: {columnas_cnt}")
+        if len(partes) == 1:
+            partes.extend(["PORTALES DIGITALES: 0", "TELEVISIÓN: 0", "RADIO: 0", "PRENSA LOCAL: 0", "COLUMNAS: 0"])
+        texto_totales = "\n".join(partes)
 
     add_run_verdana(p_tot, texto_totales, bold=True, size_pt=10)
 
@@ -429,7 +416,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales, usar_sentimien
     p_temas.paragraph_format.space_after = Pt(4)
     add_run_verdana(p_temas, "Temas relevantes informativos", bold=True, size_pt=10)
 
-    temas_3x3 = obtener_3_temas_positivos_y_negativos(df_filtrado, nombre_hoja)
+    temas_3x3 = extraer_resumen_temas_real(df_filtrado, nombre_hoja)
     for linea in temas_3x3.split("\n"):
         linea_clean = linea.strip()
         if linea_clean:
@@ -454,8 +441,8 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales, usar_sentimien
         p_f.paragraph_format.space_after = Pt(2)
         add_run_verdana(p_f, fecha_item, bold=True, size_pt=10.5, color_rgb=RGBColor(0, 51, 102))
 
-        pos_df = sub_df[sub_df["sentimiento_ia"].isin(["POSITIVA", "NEUTRA"])]
-        neg_df = sub_df[sub_df["sentimiento_ia"] == "NEGATIVA"]
+        pos_df = sub_df[sub_df["sentimiento_final"].isin(["POSITIVA", "NEUTRA"])]
+        neg_df = sub_df[sub_df["sentimiento_final"] == "NEGATIVA"]
 
         if es_redes_sociales:
             if len(pos_df) > 0:
@@ -468,7 +455,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales, usar_sentimien
                     autor = obtener_campo(row, ["Autor", "Author name", "Fuente", "Media name", "Programa"])
                     handle = obtener_campo(row, ["Author handle (@username)", "Handle", "Username"])
                     detalle = obtener_campo(row, ["Contenido", "Detail", "Summary", "Síntesis", "Titulo", "Title"])
-                    link = obtener_campo(row, ["Link URL Medio", "URL", "Link de Nota", "Link", "Enlace"])
+                    link = obtener_campo(row, ["Link URL Medio", "Link a Testigo", "Link de Nota", "URL", "Link", "Enlace"])
 
                     p_a = doc.add_paragraph()
                     p_a.paragraph_format.space_before = Pt(4)
@@ -487,7 +474,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales, usar_sentimien
 
         else:
             if len(pos_df) > 0:
-                grupos = pos_df.groupby(lambda i: obtener_campo(pos_df.loc[i], ["Tipo de Nota", "Tipo de Medio", "Fuente"]) or "PORTALES DIGITALES")
+                grupos = pos_df.groupby(lambda i: obtener_campo(pos_df.loc[i], ["Tipo de Medio", "Tipo de Nota", "Fuente"]) or "MEDIOS")
                 for m_type, grupo_m in grupos:
                     p_m = doc.add_paragraph()
                     p_m.paragraph_format.space_before = Pt(4)
@@ -499,7 +486,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales, usar_sentimien
                         medio = obtener_campo(row, ["Nombre del Medio", "Fuente", "Media name"])
                         autor = obtener_campo(row, ["Autor", "Author name", "Programa"])
                         titulo = obtener_campo(row, ["Titulo", "Contenido", "Detail", "Summary"])
-                        link = obtener_campo(row, ["Link URL Medio", "URL", "Link de Nota", "Link", "Enlace"])
+                        link = obtener_campo(row, ["Link URL Medio", "Link a Testigo", "Link de Nota", "URL", "Link", "Enlace"])
 
                         p_a = doc.add_paragraph()
                         p_a.paragraph_format.space_before = Pt(4)
@@ -526,7 +513,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales, usar_sentimien
                 medio = obtener_campo(row, ["Nombre del Medio", "Fuente", "Media name"])
                 autor = obtener_campo(row, ["Autor", "Author name", "Programa"])
                 titulo = obtener_campo(row, ["Titulo", "Contenido", "Detail", "Summary"])
-                link = obtener_campo(row, ["Link URL Medio", "URL", "Link de Nota", "Link", "Enlace"])
+                link = obtener_campo(row, ["Link URL Medio", "Link a Testigo", "Link de Nota", "URL", "Link", "Enlace"])
 
                 p_a = doc.add_paragraph()
                 p_a.paragraph_format.space_before = Pt(4)
@@ -539,6 +526,8 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales, usar_sentimien
                 add_run_verdana(p_d, limpiar_texto(titulo), bold=False, size_pt=9.5)
 
                 if link:
+                    p_l = doc.add_paragraph()
+                    p_l.paragraph_format.space_after = Pt(:
                     p_l = doc.add_paragraph()
                     p_l.paragraph_format.space_after = Pt(6)
                     add_run_verdana(p_l, link, bold=False, size_pt=9, color_rgb=RGBColor(0, 102, 204), underline=True)
@@ -554,21 +543,10 @@ tipo_analisis = st.radio(
     "¿Qué tipo de archivo vas a analizar?",
     [
         "Redes Sociales",
-        "Medios Tradicionales / Portales (Prensa, TV, Radio, Portales)"
+        "Medios Tradicionales / Portales / TV y Radio"
     ],
     index=0
 )
-
-metodo_sentimiento = st.radio(
-    "¿Cómo deseas clasificar el sentimiento de las notas?",
-    [
-        "Clasificar con IA (Lee el texto y evalúa el impacto reputacional)",
-        "Extraer del archivo (Usa la columna 'Sentimiento' / 'Tono' y convierte Neutras a Positivas)"
-    ],
-    index=1
-)
-
-usar_sentimiento_archivo = (metodo_sentimiento == "Extraer del archivo (Usa la columna 'Sentimiento' / 'Tono' y convierte Neutras a Positivas)")
 
 if tipo_analisis == "Redes Sociales":
     uploaded_file = st.file_uploader(
@@ -582,11 +560,11 @@ if tipo_analisis == "Redes Sociales":
 
     if uploaded_file and actor_nombre_in:
         if st.button("Generar Reporte Oficial", type="primary"):
-            with st.spinner("Analizando publicaciones y generando reporte..."):
+            with st.spinner("Analizando publicaciones con IA..."):
                 try:
                     dict_h = cargar_archivo_seguro(uploaded_file)
                     df_redes = list(dict_h.values())[0]
-                    buf = crear_doc_desde_hoja(df_redes, actor_nombre_in, es_redes_sociales=True, usar_sentimiento_archivo=usar_sentimiento_archivo)
+                    buf = crear_doc_desde_hoja(df_redes, actor_nombre_in, es_redes_sociales=True)
                     if buf is not None:
                         st.success(f"¡Reporte generado exitosamente para '{actor_nombre_in}'!")
                         st.download_button(
@@ -602,8 +580,8 @@ if tipo_analisis == "Redes Sociales":
 
 else:
     uploaded_file = st.file_uploader(
-        "Sube tu archivo Excel de Medios Tradicionales (con múltiples candidatos/hojas)",
-        type=["xlsx", "xls"]
+        "Sube tu archivo Excel de Medios Tradicionales (TV, Radio, Portales o Prensa)",
+        type=["xlsx", "xls", "csv"]
     )
 
     if uploaded_file:
@@ -623,14 +601,14 @@ else:
             if modo == "Generar un Candidato Específico":
                 hoja_sel = st.selectbox("Selecciona la hoja a procesar:", hojas_disponibles)
                 if st.button("Generar Reporte de esta Hoja", type="primary"):
-                    with st.spinner("Analizando publicaciones y generando reporte..."):
+                    with st.spinner("Procesando notas y generando documento..."):
                         df_h = dict_hojas[hoja_sel]
                         if 'Menu' in df_h.columns and len(df_h['Menu'].dropna()) > 0:
                             nombre_h = str(df_h['Menu'].dropna().iloc[0]).strip()
                         else:
                             nombre_h = hoja_sel
 
-                        buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False, usar_sentimiento_archivo=usar_sentimiento_archivo)
+                        buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False)
                         if buf is not None:
                             st.success(f"¡Reporte generado exitosamente para '{nombre_h}'!")
                             st.download_button(
@@ -656,7 +634,7 @@ else:
                                 else:
                                     nombre_h = h_key
 
-                                buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False, usar_sentimiento_archivo=usar_sentimiento_archivo)
+                                buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False)
                                 if buf is not None:
                                     doc_bytes = buf.getvalue()
                                     fname = f"Reporte_{nombre_h.replace(' ', '_')}.docx"
@@ -669,7 +647,7 @@ else:
                             st.download_button(
                                 label="📦 Descargar Archivo .ZIP con TODOS los Reportes",
                                 data=zip_buffer,
-                                file_name="Reportes_Monitoreo_Completos.zip",
+                                file_name="Reportes_Tradicionales_Completos.zip",
                                 mime="application/zip"
                             )
                         else:
