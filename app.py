@@ -29,7 +29,7 @@ st.set_page_config(
 st.title("📊 Generador de Monitoreo de Actores Políticos")
 st.write(
     "Genera reportes oficiales en Word con filtrado automático de cuentas "
-    "institucionales, clasificación de IA y extracción de temas reales."
+    "institucionales, clasificación de IA y resúmenes ejecutivos en párrafos concisos."
 )
 
 # API Key Pre-integrada
@@ -43,15 +43,15 @@ Tu misión es evaluar el impacto reputacional de cada nota para el actor políti
 
 REGLAS ESTRICTAS DE CLASIFICACIÓN POLÍTICA:
 1. NEGATIVA:
-   - Seguridad y Nota Roja: Asaltos, cristalazos, robo de autopartes, homicidios o balaceras ocurridas en su demarcación o atribuibles a falta de vigilancia.
+   - Seguridad y Nota Roja: Asaltos, cristalazos, robo de autopartes, homicidios o detenciones viales/accidentes y tráfico de influencias.
    - Corrupción y Fiscalización: Auditorías de la ASE, desvíos de recursos, presunto daño patrimonial, señalamientos de nepotismo o falta de transparencia.
    - Crisis Política: Desplantes institucionales, confrontaciones, controversias por bardas/lonas, o quejas ciudadanas por baches, basura, agua o socavones.
-   - Críticas Ciudadanas: Comentarios de usuarios, periodistas o columnistas cuestionando su desempeño, capacidad o ética.
+   - Críticas Ciudadanas: Comentarios de usuarios, periodistas o columnistas cuestionando su desempeño, capacidad, prepotencia o ética.
 
 2. POSITIVA / INFORMATIVA:
-   - Programas y Bienestar: Entrega de apoyos alimentarios, medicamentos, kits escolares, becas, desayunadores o atención médica.
-   - Obras y Gobierno: Pavimentación, luminarias, convenios de colaboración (CANACO, OCDE, universidades), hermanamientos y sesiones de cabildo.
-   - Agenda Cultural y Deportiva: Foros ('Ser Mujer'), ferias tradicionales ('Feria del Queso'), carreras y eventos juveniles.
+   - Programas y Bienestar: Entrega de apoyos alimentarios, medicamentos, kits escolares, becas, obra comunitaria o atención médica.
+   - Obras y Gobierno: Pavimentación, luminarias, paneles solares, convenios de colaboración, hermanamientos y sesiones de cabildo.
+   - Agenda Cultural y Deportiva: Foros, ferias tradicionales, carreras y eventos juveniles.
    - Posicionamiento Favorable: Encuestas de aprobación, liderazgo interno y notas informativas descriptivas de su gestión.
 """
 
@@ -68,7 +68,6 @@ def normalizar_cadena(texto):
     t = quitar_acentos(texto)
     return re.sub(r'[^a-z0-9]', '', t)
 
-# --- MOTOR DE FILTRADO Y EXCLUSIÓN DE CUENTAS INSTITUCIONALES / PERSONALES ---
 PATRONES_INSTITUCIONALES = [
     r'ayuntamiento', r'snandresoficial', r'pueblaayto', r'gobiernoded', r'gobpue',
     r'ssppc', r'seguridadciudadana', r'seguridadpublica', r'proteccioncivil', r'pcgob',
@@ -126,20 +125,16 @@ def es_publicacion_descartable(row, actor_nombre_target, bloqueos_personalizados
     handle = str(row.get('Author handle (@username)', row.get('Handle', ''))).strip()
     detalle = str(row.get('Contenido', row.get('Detail', row.get('Titulo', '')))).strip()
     
-    # 1. ¿Es la cuenta del propio actor?
     if es_cuenta_del_actor(autor, handle, actor_nombre_target):
         return True, "Cuenta oficial del Actor"
         
-    # 2. ¿Es una dependencia, secretaría o ayuntamiento?
     if es_institucional(autor, handle):
         return True, "Cuenta institucional / dependencia"
         
-    # 3. ¿Es una publicación personal no informativa?
     det_lower = quitar_acentos(detalle)
     if any(p in det_lower for p in ['mis ahijados andres y alexander', 'con toda la actitud #graciasdios', 'primeracomunion']):
         return True, "Publicación personal / familiar"
         
-    # 4. Bloqueos personalizados añadidos por el usuario
     if bloqueos_personalizados:
         aut_norm = normalizar_cadena(autor)
         hnd_norm = normalizar_cadena(handle)
@@ -274,7 +269,7 @@ Responde ÚNICAMENTE un JSON válido con este formato:
         res_map = {}
         for item in lista_notas:
             t = item["texto"].lower()
-            if any(k in t for k in ["asalto", "robo", "daño patrimonial", "317 millones", "ase", "nepotismo", "desfalco", "desplante", "inseguridad", "bache"]):
+            if any(k in t for k in ["asalto", "robo", "daño patrimonial", "317 millones", "ase", "nepotismo", "desfalco", "desplante", "inseguridad", "bache", "ebrio", "borracho", "charolazo", "prepotencia", "prepotente"]):
                 res_map[item["id"]] = "NEGATIVA"
             else:
                 res_map[item["id"]] = "POSITIVA"
@@ -311,6 +306,7 @@ def determinar_sentimiento_df(df_data, actor_nombre_target, es_tradicionales):
     progreso.empty()
     return sentimientos_finales
 
+# --- GENERADOR DEL RESUMEN EJECUTIVO EN PÁRRAFOS CONCISOS Y ESTRUCTURADOS ---
 def extraer_resumen_temas_real(df_data, actor_nombre):
     pos_df = df_data[df_data["sentimiento_final"].isin(["POSITIVA", "NEUTRA"])]
     neg_df = df_data[df_data["sentimiento_final"] == "NEGATIVA"]
@@ -329,36 +325,31 @@ def extraer_resumen_temas_real(df_data, actor_nombre):
 
     if len(pos_textos) > 0 or len(neg_textos) > 0:
         prompt = f"""
-Eres un analista de comunicación política.
-Redacta un RESUMEN EJECUTIVO para "{actor_nombre}".
-Debes basarte ESTRICTAMENTE en estos hechos del archivo:
+Eres un analista experto en comunicación política y redacción ejecutiva en Puebla.
+Redacta un RESUMEN TEMÁTICO EJECUTIVO para el actor político: "{actor_nombre}".
 
-NOTICIAS POSITIVAS ({len(pos_textos)} notas):
-{str(pos_textos[:20])}
-
-NOTICIAS NEGATIVAS ({len(neg_textos)} notas):
-{str(neg_textos[:15])}
-
-REGLAS:
-1. Puntos Positivos: De 1 a 3 temas basados en las notas positivas.
-2. Puntos Negativos:
-   - Si hay {len(neg_textos)} notas negativas, redacta de 1 a 3 temas NEGATIVOS explicando las controversias reales.
-   - Si NO hay notas negativas (0 notas negativas), pon exactamente:
+REGLAS ESTRICTAS DE FORMATO Y EXTENSIÓN:
+1. CADA PUNTO DEBE SER UN ÚNICO PÁRRAFO DE MÁXIMO 3 LÍNEAS.
+2. ESTRUCTURA DE CADA PUNTO:
+   [Número]. [Título del Eje Temático en Mayúsculas y Minúsculas]: [Síntesis ejecutiva de 2-3 líneas explicando el hecho concreto con nombres de programas, lugares, obras o instituciones].
+3. ESTÁ ESTRICTAMENTE PROHIBIDO PEGAR TEXTOS LARGOS DE NOTICIAS, TRANSCRIPCIONES O MÚLTIPLES PÁRRAFOS DENTRO DE UN PUNTO. SINTETIZA.
+4. PUNTOS POSITIVOS: Redacta exactamente de 1 a 3 ejes positivos.
+5. PUNTOS NEGATIVOS:
+   - Si existen notas negativas ({len(neg_textos)} notas), redacta exactamente de 1 a 3 ejes negativos explicando las controversias o señalamientos reales.
+   - Si NO hay notas negativas (0 notas negativas), pon obligatoriamente:
      1. No se registraron temas negativos en el periodo analizado.
-3. NO incluyas frases estadísticas.
 
-FORMATO:
-1. [Tema positivo 1]
-2. [Tema positivo 2]
+NOTICIAS POSITIVAS DISPONIBLES ({len(pos_textos)} notas):
+{str(pos_textos[:25])}
 
-TEMAS NEGATIVOS:
-1. [Tema negativo 1 o leyenda si no hay]
+NOTICIAS NEGATIVAS DISPONIBLES ({len(neg_textos)} notas):
+{str(neg_textos[:20])}
 """
         try:
             res_ia = model.generate_content(prompt).text.strip()
             if len(neg_textos) > 0 and "no se registraron temas negativos" in res_ia.lower():
                 pass
-            elif res_ia and len(res_ia) > 25:
+            elif res_ia and len(res_ia) > 30 and len(res_ia) < 1200:
                 return res_ia
         except Exception:
             pass
@@ -372,7 +363,8 @@ TEMAS NEGATIVOS:
         if not titulos_unicos_pos:
             titulos_unicos_pos = [pos_textos[0]]
         for i, t in enumerate(titulos_unicos_pos[:3], 1):
-            lineas_res.append(f"{i}. {t}")
+            t_clean = t.split('.')[0].strip()
+            lineas_res.append(f"{i}. Actividades y Agenda de Trabajo: {t_clean}.")
     else:
         lineas_res.append("1. Difusión de actividades y agenda institucional de trabajo.")
 
@@ -386,14 +378,14 @@ TEMAS NEGATIVOS:
         if not titulos_unicos_neg:
             titulos_unicos_neg = [neg_textos[0]]
         for i, t in enumerate(titulos_unicos_neg[:3], 1):
-            lineas_res.append(f"{i}. {t}")
+            t_clean = t.split('.')[0].strip()
+            lineas_res.append(f"{i}. Controversias y Señalamientos Públicos: {t_clean}.")
     else:
         lineas_res.append("1. No se registraron temas negativos en el periodo analizado.")
 
     return "\n".join(lineas_res)
 
 def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales, bloqueos_personalizados=None):
-    # 1. Aplicar filtro de descarte de cuentas oficiales, dependencias y fotos personales
     mask_descarte = df_hoja.apply(lambda r: es_publicacion_descartable(r, nombre_hoja, bloqueos_personalizados)[0], axis=1)
     df_filtrado = df_hoja[~mask_descarte].copy()
     
@@ -432,7 +424,6 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales, bloqueos_perso
     else:
         periodo_texto = f"{min_d.strftime('%d')} al {max_d.strftime('%d')} de {MESES_ES[max_d.month]} de {max_d.year}"
 
-    # Asignar sentimientos por lotes
     df_filtrado["sentimiento_final"] = determinar_sentimiento_df(df_filtrado, nombre_hoja, es_tradicionales=not es_redes_sociales)
 
     positivas_cnt = len(df_filtrado[df_filtrado["sentimiento_final"].isin(["POSITIVA", "NEUTRA"])])
@@ -530,7 +521,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales, bloqueos_perso
 
     add_run_verdana(p_tot, texto_totales, bold=True, size_pt=10)
 
-    # 3. Resumen
+    # 3. Resumen Estructurado en Párrafos Concisos
     p_res = doc.add_paragraph()
     p_res.paragraph_format.space_before = Pt(10)
     add_run_verdana(p_res, "RESUMEN", bold=True, size_pt=11)
@@ -686,12 +677,12 @@ if tipo_analisis == "Redes Sociales":
     )
     actor_nombre_in = st.text_input(
         "Nombre y Partido del Actor Político",
-        placeholder="ej. GUADALUPE CUAUTLE TORRES (PAN)",
+        placeholder="ej. RAYMUNDO CUAUTLI (MORENA)",
     ).strip().upper()
 
     if uploaded_file and actor_nombre_in:
         if st.button("Generar Reporte Oficial", type="primary"):
-            with st.spinner("Filtrando cuentas oficiales y analizando con IA..."):
+            with st.spinner("Filtrando cuentas oficiales y generando reporte con IA..."):
                 try:
                     dict_h = cargar_archivo_seguro(uploaded_file)
                     df_redes = list(dict_h.values())[0]
