@@ -226,7 +226,7 @@ TEMAS NEGATIVOS:
         except Exception:
             pass
 
-    # 2. Extractor Infalible Directo de las Notas Reales (CERO Texto Genérico)
+    # 2. Extractor Directo de las Notas Reales (Sin texto genérico)
     lineas_res = []
     if len(pos_textos) > 0:
         titulos_unicos_pos = list(dict.fromkeys([
@@ -300,6 +300,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     else:
         periodo_texto = f"{min_d.strftime('%d')} al {max_d.strftime('%d')} de {MESES_ES[max_d.month]} de {max_d.year}"
 
+    # Asignar sentimientos
     sentimientos = []
     progreso = st.progress(0)
     total_filas = len(df_filtrado)
@@ -526,8 +527,6 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                 add_run_verdana(p_d, limpiar_texto(titulo), bold=False, size_pt=9.5)
 
                 if link:
-                    p_l = doc.add_paragraph()
-                    p_l.paragraph_format.space_after = Pt(:
                     p_l = doc.add_paragraph()
                     p_l.paragraph_format.space_after = Pt(6)
                     add_run_verdana(p_l, link, bold=False, size_pt=9, color_rgb=RGBColor(0, 102, 204), underline=True)
