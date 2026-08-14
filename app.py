@@ -785,7 +785,4 @@ else:
 
         except Exception as e:
             st.error(f"Error procesando el archivo: {str(e)}")
-EOF
-python3 -m py_compile /working_dir/definitive_app_pro_summarizer.py
-}
-}
+
