@@ -28,15 +28,15 @@ st.set_page_config(
 
 st.title("📊 Generador de Monitoreo de Actores Políticos")
 st.write(
-    "Sube tu archivo para generar los informes oficiales en formato Word "
-    "con limpieza automática de cuentas institucionales y análisis de IA."
+    "Genera reportes oficiales en Word con filtrado institucional, clasificación precisa "
+    "y síntesis ejecutiva estructurada por ejes temáticos."
 )
 
 # API Key Pre-integrada
 GEMINI_API_KEY = "AQ.Ab8RN6LoOHgBblHSIETp2LjyBofO48YsSqSeojXYFAAKGvFa0w"
 genai.configure(api_key=GEMINI_API_KEY)
 
-# 1. MODELO ESPECIALIZADO PARA CLASIFICACIÓN POLÍTICA (JSON / Temp 0.0)
+# 1. MODELO PARA CLASIFICACIÓN POLÍTICA (JSON / Temp 0.0)
 SYSTEM_PROMPT_CLASIFICACION = """
 Eres un analista senior de inteligencia política y monitoreo de medios en el Estado de Puebla.
 Tu misión es evaluar el impacto reputacional de cada publicación para el actor político objetivo.
@@ -61,7 +61,7 @@ model_clasificador = genai.GenerativeModel(
     generation_config={"temperature": 0.0}
 )
 
-# 2. MODELO ESPECIALIZADO PARA REDACCIÓN DEL RESUMEN EJECUTIVO (Temp 0.2)
+# 2. MODELO PARA REDACCIÓN DEL RESUMEN EJECUTIVO (Temp 0.2)
 model_redactor = genai.GenerativeModel(
     model_name="gemini-1.5-flash",
     generation_config={"temperature": 0.2}
@@ -74,7 +74,6 @@ def normalizar_cadena(texto):
     t = quitar_acentos(texto)
     return re.sub(r'[^a-z0-9]', '', t)
 
-# --- MOTOR AUTOMÁTICO DE LIMPIEZA DE CUENTAS INSTITUCIONALES Y PERSONALES ---
 PATRONES_INSTITUCIONALES = [
     r'ayuntamiento', r'snandresoficial', r'pueblaayto', r'gobiernoded', r'gobpue',
     r'ssppc', r'seguridadciudadana', r'seguridadpublica', r'proteccioncivil', r'pcgob',
@@ -127,28 +126,30 @@ def es_institucional(autor, handle):
             return True
     return False
 
-def limpiar_dataframe_redes_automatico(df_raw, actor_nombre_target):
-    def es_descartable(row):
-        autor = str(row.get('Autor', row.get('Author name', ''))).strip()
-        handle = str(row.get('Author handle (@username)', row.get('Handle', ''))).strip()
-        detalle = str(row.get('Contenido', row.get('Detail', row.get('Titulo', '')))).strip()
-        
-        if es_cuenta_del_actor(autor, handle, actor_nombre_target):
-            return True
-        if es_institucional(autor, handle):
-            return True
-        
-        det_lower = quitar_acentos(detalle)
-        if any(p in det_lower for p in ['mis ahijados andres y alexander', 'con toda la actitud #graciasdios', 'primeracomunion']):
-            return True
-            
-        return False
-
-    mask_descarte = df_raw.apply(es_descartable, axis=1)
-    df_limpio = df_raw[~mask_descarte].copy()
-    total_descartadas = mask_descarte.sum()
+def es_publicacion_descartable(row, actor_nombre_target, bloqueos_personalizados=None):
+    autor = str(row.get('Autor', row.get('Author name', ''))).strip()
+    handle = str(row.get('Author handle (@username)', row.get('Handle', ''))).strip()
+    detalle = str(row.get('Contenido', row.get('Detail', row.get('Titulo', '')))).strip()
     
-    return df_limpio, total_descartadas
+    if es_cuenta_del_actor(autor, handle, actor_nombre_target):
+        return True, "Cuenta oficial del Actor"
+        
+    if es_institucional(autor, handle):
+        return True, "Cuenta institucional / dependencia"
+        
+    det_lower = quitar_acentos(detalle)
+    if any(p in det_lower for p in ['mis ahijados andres y alexander', 'con toda la actitud #graciasdios', 'primeracomunion']):
+        return True, "Publicación personal / familiar"
+        
+    if bloqueos_personalizados:
+        aut_norm = normalizar_cadena(autor)
+        hnd_norm = normalizar_cadena(handle)
+        for b in bloqueos_personalizados:
+            b_norm = normalizar_cadena(b)
+            if b_norm and (b_norm in aut_norm or b_norm in hnd_norm):
+                return True, f"Bloqueo manual ({b})"
+                
+    return False, "Válida"
 
 def cargar_archivo_seguro(file):
     try:
@@ -311,6 +312,7 @@ def determinar_sentimiento_df(df_data, actor_nombre_target, es_tradicionales):
     progreso.empty()
     return sentimientos_finales
 
+# --- GENERADOR DEL RESUMEN EJECUTIVO EN PÁRRAFOS CONCISOS Y ESTRUCTURADOS ---
 def extraer_resumen_temas_real(df_data, actor_nombre):
     pos_df = df_data[df_data["sentimiento_final"].isin(["POSITIVA", "NEUTRA"])]
     neg_df = df_data[df_data["sentimiento_final"] == "NEGATIVA"]
@@ -329,16 +331,24 @@ def extraer_resumen_temas_real(df_data, actor_nombre):
 
     prompt = f"""
 Eres un analista senior de comunicación política y redacción ejecutiva en Puebla.
-Redacta el "RESUMEN" ejecutivo oficial para el actor político: "{actor_nombre}".
+Redacta el "RESUMEN" ejecutivo estructurado para el actor político: "{actor_nombre}".
 
 REGLAS DE FORMATO (OBLIGATORIAS):
-1. Cada punto DEBE ser exactamente de 1 solo párrafo fluido (de 2 a 3 líneas).
+1. Cada punto DEBE ser exactamente de 1 solo párrafo (de 2 a 3 líneas).
 2. Estructura exacta de cada viñeta:
    [Número]. [Título del Eje Temático Específico]: [Síntesis ejecutiva explicando los hechos con nombres de programas, lugares, obras o instituciones].
 3. Prohibido copiar o pegar párrafos completos de las noticias originales. Debes resumir y redactar con elegancia institucional.
 4. Genera de 1 a 3 puntos en 'Temas relevantes informativos' y de 1 a 3 puntos en 'Temas negativos'.
 5. Si no hay notas negativas ({len(neg_textos)} negativas registradas), escribe obligatoriamente:
    1. No se registraron temas negativos en el periodo analizado.
+
+EJEMPLO EXACTO DE SALIDA:
+Temas relevantes informativos
+1. Obra Comunitaria y Educación: Arranque de proyectos de infraestructura y equipamiento con paneles solares en la Telesecundaria Otilio Montaño y rehabilitación en el Centro Comunitario de San Diego Cuachayotla.
+2. Supervisión de Programas de Bienestar: Cobertura de los recorridos institucionales de atención ciudadana y entrega directa de apoyos sociales en juntas auxiliares.
+
+Temas negativos
+1. Incidente Vial y Detención en Sonata: Amplia difusión en redes y medios de comunicación de videos donde el funcionario es retenido por policías municipales tras un choque en presunto estado de ebriedad y señalamientos por intentar utilizar influencias.
 
 NOTICIAS POSITIVAS DISPONIBLES:
 {str(pos_textos[:25])}
@@ -357,6 +367,7 @@ NOTICIAS NEGATIVAS DISPONIBLES:
     except Exception:
         pass
 
+    # Generador de respaldo de alta calidad (1 párrafo por punto)
     lineas_res = ["Temas relevantes informativos"]
     if len(pos_textos) > 0:
         titulos_unicos_pos = list(dict.fromkeys([
@@ -383,13 +394,13 @@ NOTICIAS NEGATIVAS DISPONIBLES:
 
     return "\n".join(lineas_res)
 
-def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
-    if es_redes_sociales:
-        df_filtrado, total_descartadas = limpiar_dataframe_redes_automatico(df_hoja, nombre_hoja)
-        if total_descartadas > 0:
-            st.info(f"ℹ️ Se limpiaron automáticamente {total_descartadas} publicaciones institucionales/personales. Analizando {len(df_filtrado)} menciones ciudadanas reales.")
-    else:
-        df_filtrado = df_hoja.copy()
+def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales, bloqueos_personalizados=None):
+    mask_descarte = df_hoja.apply(lambda r: es_publicacion_descartable(r, nombre_hoja, bloqueos_personalizados)[0], axis=1)
+    df_filtrado = df_hoja[~mask_descarte].copy()
+    
+    total_descartadas = mask_descarte.sum()
+    if total_descartadas > 0:
+        st.info(f"ℹ️ Se filtraron {total_descartadas} publicaciones institucionales y personales. Analizando {len(df_filtrado)} menciones reales.")
 
     if len(df_filtrado) == 0:
         return None
@@ -646,7 +657,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     buffer.seek(0)
     return buffer
 
-# --- INTERFAZ STREAMLIT LIMPIA Y DIRECTA ---
+# --- INTERFAZ STREAMLIT ---
 
 tipo_analisis = st.radio(
     "¿Qué tipo de archivo vas a analizar?",
@@ -657,6 +668,16 @@ tipo_analisis = st.radio(
     index=0
 )
 
+# Opciones avanzadas de filtrado
+with st.expander("⚙️ Configuración de Bloqueo de Perfiles / Cuentas"):
+    st.write("El sistema ya filtra automáticamente las cuentas oficiales del actor y secretarías.")
+    bloqueos_extra_raw = st.text_area(
+        "Cuentas o palabras adicionales a descartar (separadas por comas):",
+        placeholder="ej. Paco Osorio, Raymundo Cuautli, funcionario_xyz",
+        help="Cualquier publicación emitida por estos autores o perfiles será eliminada del análisis."
+    )
+    bloqueos_extra = [b.strip() for b in bloqueos_extra_raw.split(",") if b.strip()] if bloqueos_extra_raw else []
+
 if tipo_analisis == "Redes Sociales":
     uploaded_file = st.file_uploader(
         "Sube tu archivo Excel o CSV de Redes Sociales",
@@ -664,16 +685,16 @@ if tipo_analisis == "Redes Sociales":
     )
     actor_nombre_in = st.text_input(
         "Nombre y Partido del Actor Político",
-        placeholder="ej. GUADALUPE CUAUTLE TORRES (PAN)",
+        placeholder="ej. RAYMUNDO CUAUTLI (MORENA)",
     ).strip().upper()
 
     if uploaded_file and actor_nombre_in:
         if st.button("Generar Reporte Oficial", type="primary"):
-            with st.spinner("Limpiando cuentas oficiales y procesando con IA..."):
+            with st.spinner("Filtrando cuentas oficiales y redactando resumen con IA..."):
                 try:
                     dict_h = cargar_archivo_seguro(uploaded_file)
                     df_redes = list(dict_h.values())[0]
-                    buf = crear_doc_desde_hoja(df_redes, actor_nombre_in, es_redes_sociales=True)
+                    buf = crear_doc_desde_hoja(df_redes, actor_nombre_in, es_redes_sociales=True, bloqueos_personalizados=bloqueos_extra)
                     if buf is not None:
                         st.success(f"¡Reporte generado exitosamente para '{actor_nombre_in}'!")
                         st.download_button(
@@ -683,7 +704,7 @@ if tipo_analisis == "Redes Sociales":
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                         )
                     else:
-                        st.warning("El archivo no contiene notas válidas tras la limpieza automática.")
+                        st.warning("El archivo no contiene notas válidas tras aplicar los filtros.")
                 except Exception as e:
                     st.error(f"Error procesando el archivo: {str(e)}")
 
@@ -717,7 +738,7 @@ else:
                         else:
                             nombre_h = hoja_sel
 
-                        buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False)
+                        buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False, bloqueos_personalizados=bloqueos_extra)
                         if buf is not None:
                             st.success(f"¡Reporte generado exitosamente para '{nombre_h}'!")
                             st.download_button(
@@ -743,7 +764,7 @@ else:
                                 else:
                                     nombre_h = h_key
 
-                                buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False)
+                                buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False, bloqueos_personalizados=bloqueos_extra)
                                 if buf is not None:
                                     doc_bytes = buf.getvalue()
                                     fname = f"Reporte_{nombre_h.replace(' ', '_')}.docx"
@@ -764,3 +785,7 @@ else:
 
         except Exception as e:
             st.error(f"Error procesando el archivo: {str(e)}")
+EOF
+python3 -m py_compile /working_dir/definitive_app_pro_summarizer.py
+}
+}
