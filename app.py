@@ -28,42 +28,48 @@ st.set_page_config(
 
 st.title("📊 Generador de Monitoreo de Actores Políticos")
 st.write(
-    "Genera reportes oficiales en Word con filtrado institucional, clasificación precisa "
-    "sin falsos negativos y resúmenes ejecutivos estructurados."
+    "Sistema universal de monitoreo político para cualquier perfil o cargo público. "
+    "Genera reportes oficiales en Word con clasificación de IA, filtrado automático y síntesis ejecutiva."
 )
 
 # API Key Pre-integrada
 GEMINI_API_KEY = "AQ.Ab8RN6LoOHgBblHSIETp2LjyBofO48YsSqSeojXYFAAKGvFa0w"
 genai.configure(api_key=GEMINI_API_KEY)
 
-# 1. MODELO ESPECIALIZADO PARA CLASIFICACIÓN POLÍTICA (JSON / Temp 0.0)
-SYSTEM_PROMPT_CLASIFICACION = """
-Eres un analista senior de inteligencia política y monitoreo de medios en el Estado de Puebla.
-Tu misión es evaluar con precisión el impacto reputacional de cada publicación para el actor político objetivo.
+# ==============================================================================
+# BASE DE CONOCIMIENTO Y CRITERIOS UNIVERSALES DE CLASIFICACIÓN POLÍTICA
+# ==============================================================================
+SYSTEM_PROMPT_UNIVERSAL = """
+Eres un analista senior de inteligencia política, comunicación gubernamental y monitoreo de medios.
+Tu objetivo es clasificar publicaciones para CUALQUIER actor político (presidente municipal, gobernador, legislador, secretario de estado, dirigente partidista o candidato).
 
-REGLAS ESTRICTAS DE CLASIFICACIÓN POLÍTICA:
+Determina el impacto reputacional del texto para el actor político objetivo en una de dos categorías: 'POSITIVA' o 'NEGATIVA'.
 
-1. REGLAS PARA POSITIVA / INFORMATIVA:
-   - ESTADÍSTICAS Y LOGROS DE SEGURIDAD: Cualquier nota que informe sobre la DISMINUCIÓN, BAJA o REDUCCIÓN de delitos (ej. 'bajan 10.78% delitos', 'cae robo de vehículos', operativos de vigilancia exitosos) es POSITIVA / INFORMATIVA (logro de gobierno).
-   - CONVENIOS LABORALES: Acuerdos con sindicatos (CTM), convenios funerarios, prestaciones y mejoras salariales son POSITIVAS / INFORMATIVAS.
-   - PROGRAMAS Y BIENESTAR: Entrega de apoyos, kits escolares, despensas, becas, obra comunitaria, jornadas de atención ciudadana ('Miércoles del Pueblo') y eventos de salud.
-   - TRADICIONES Y TURISMO: Cabalgatas, ferias patronales, 'Comida con Causa', Expo Universidades, plataformas digitales (visitcholula) y reforestación.
-   - COBERTURA POLÍTICA GENERAL: Alianzas, toma de protesta y notas informativas descriptivas de su gestión.
+============================================================
+REGLAS UNIVERSALES DE CLASIFICACIÓN:
+============================================================
 
-2. REGLAS PARA NEGATIVA / CRÍTICA:
-   - HECHOS DE INSEGURIDAD EN TIEMPO REAL: Asaltos ocurridos en el municipio, robo de autopartes denunciado por ciudadanos, cristalazos, homicidios o impunidad policial.
-   - PROTESTAS Y RECLAMOS CIUDADANOS: Vecinos manifestándose en juntas auxiliares (ej. Momoxpan), quejas por baches sin tapar, basura o falta de presupuesto.
-   - CORRUPCIÓN Y FISCALIZACIÓN: Investigaciones de la ASE, daño patrimonial, desfalcos, nepotismo o falta de transparencia.
-   - CRISIS Y ATAQUES POLÍTICOS: Detenciones de funcionarios en estado de ebriedad, tráfico de influencias, acusaciones de falsear cifras o descalificaciones de opositores.
+1. DEBES CLASIFICAR COMO 'POSITIVA' (O INFORMATIVA FAVORABLE):
+   - LOGROS DE GESTIÓN Y CIFRAS A FAVOR: Informes de actividades, rendición de cuentas, inauguraciones de obras públicas, infraestructura, pavimentaciones, alumbrado, equipamiento y reportes de DISMINUCIÓN o BAJA en índices delictivos o rezago social.
+   - BIENESTAR Y PROGRAMAS SOCIALES: Entrega de apoyos directos, becas, despensas, kits escolares, jornadas de salud, vacunación, atención a grupos vulnerables y ferias del empleo.
+   - AGENDA INSTITUCIONAL Y RELACIONES PÚBLICAS: Convenios de colaboración, acuerdos con sindicatos o sectores empresariales, reuniones de trabajo, comparecencias, iniciativas legislativas aprobadas o presentadas, foros, eventos culturales y festividades tradicionales.
+   - COBERTURA INFORMATIVA NEUTRAL: Notas descriptivas de medios de comunicación sobre las actividades, posicionamientos o giras de trabajo del actor.
+   - POSICIONAMIENTO POLÍTICO: Resultados favorables o neutrales en encuestas de opinión pública, aprobación ciudadana o respaldos políticos.
+
+2. DEBES CLASIFICAR COMO 'NEGATIVA' (CRISIS O AFECTACIÓN REPUTACIONAL):
+   - INSEGURIDAD Y HECHOS DELICTIVOS: Cobertura de asaltos, homicidios, robos de vehículos, autopartes, balaceras o delitos ocurridos en su territorio/área de responsabilidad atribuibles a falta de vigilancia.
+   - PROTESTAS Y RECLAMOS CIUDADANOS: Manifestaciones, paros, bloqueos viales, quejas ciudadanas por deficiencia de servicios públicos (baches, basura, agua potable, drenaje, alumbrado) o señalamientos de abandono gubernamental.
+   - CORRUPCIÓN, AUDITORÍAS Y FISCALIZACIÓN: Observaciones de órganos de control o auditorías superiores por presunto daño patrimonial, desvío de recursos, enriquecimiento ilícito, nepotismo o falta de transparencia.
+   - CONDUCTA INDEBIDA Y ESCÁNDALOS: Funcionarios involucrados en detenciones, incidentes viales, prepotencia, abuso de poder, uso indebido de recursos públicos o tráfico de influencias ('charolazos').
+   - CRÍTICA POLÍTICA DIRECTA: Señalamientos de adversarios políticos, acusaciones de coacción/acarreo a eventos, 'fuego amigo', divisiones internas o columnas de opinión que descalifiquen su desempeño, origen o legitimidad.
 """
 
 model_clasificador = genai.GenerativeModel(
     model_name="gemini-1.5-flash",
-    system_instruction=SYSTEM_PROMPT_CLASIFICACION,
+    system_instruction=SYSTEM_PROMPT_UNIVERSAL,
     generation_config={"temperature": 0.0}
 )
 
-# 2. MODELO ESPECIALIZADO PARA REDACCIÓN DEL RESUMEN EJECUTIVO (Temp 0.2)
 model_redactor = genai.GenerativeModel(
     model_name="gemini-1.5-flash",
     generation_config={"temperature": 0.2}
@@ -76,16 +82,17 @@ def normalizar_cadena(texto):
     t = quitar_acentos(texto)
     return re.sub(r'[^a-z0-9]', '', t)
 
-PATRONES_INSTITUCIONALES = [
-    r'ayuntamiento', r'snandresoficial', r'pueblaayto', r'gobiernocholula', r'gobiernoded', r'gobpue',
-    r'ssppc', r'seguridadciudadana', r'seguridadpublica', r'proteccioncivil', r'pcgob',
-    r'difsnandres', r'difpue', r'difcholula', r'choluladif', r'sistemadif', r'difmunicipal',
-    r'servicios_pub', r'serviciospublicos', r'desaecopue', r'desarrolloeconomico', r'desarrollourbano',
-    r'igualdadsustantiva', r'pueblamujeres', r'juventudpuebla', r'ijmpuebla',
-    r'delegacionatlixcayotl', r'pacoosorio', r'segobspch', r'cholulalimpia', r'direccióndederechoshumanos'
+# --- PATRONES INSTITUCIONALES UNIVERSALES ---
+PATRONES_INSTITUCIONALES_GENERICOS = [
+    r'ayuntamiento', r'gobierno', r'gobpue', r'gobiernoded', r'ayto',
+    r'secretaria', r'dependencia', r'organismo', r'sindicatura', r'presidencia', r'comunicacionsocial',
+    r'seguridadciudadana', r'seguridadpublica', r'proteccioncivil', r'policiamunicipal', r'policiastat',
+    r'serviciospublicos', r'servicios_pub', r'obraspublicas', r'desarrollourbano', r'desarrolloeconomico',
+    r'difmunicipal', r'sistemadif', r'difestatal', r'institutodelamujer', r'institutodelajuventud',
+    r'organismodeagua', r'serviciodelimpia', r'organismolimpia', r'derechoshumanos'
 ]
 
-def es_cuenta_del_actor(autor, handle, actor_target):
+def es_cuenta_del_actor_universal(autor, handle, actor_target):
     aut = normalizar_cadena(autor)
     hnd = normalizar_cadena(handle)
     act = normalizar_cadena(actor_target)
@@ -98,36 +105,18 @@ def es_cuenta_del_actor(autor, handle, actor_target):
         
     tokens_actor = [t for t in re.findall(r'\w+', quitar_acentos(actor_target)) if len(t) > 3]
     
-    if any(k in tokens_actor for k in ['tonantzin', 'fernandez']):
-        if ('tonantzin' in aut or 'tonantzin' in hnd):
-            return True
-
-    if any(k in tokens_actor for k in ['guadalupe', 'lupita', 'cuautle']):
-        if ('cuautle' in aut or 'cuautle' in hnd) and any(k in aut or k in hnd for k in ['lupita', 'guadalupe']):
+    if len(tokens_actor) >= 2:
+        coincidencias_aut = sum(1 for t in tokens_actor if t in aut)
+        coincidencias_hnd = sum(1 for t in tokens_actor if t in hnd)
+        if coincidencias_aut >= 2 or coincidencias_hnd >= 2:
             return True
             
-    if 'chedraui' in tokens_actor:
-        if ('chedraui' in aut or 'chedraui' in hnd) and any(k in aut or k in hnd for k in ['pepe', 'jose']):
-            return True
-            
-    if 'artemisa' in tokens_actor and ('artemisa' in aut or 'artemisa' in hnd):
-        return True
-
-    if 'abdala' in tokens_actor and ('abdala' in aut or 'abdala' in hnd):
-        return True
-        
-    if any(k in tokens_actor for k in ['fedrha', 'suriano']) and ('suriano' in aut or 'suriano' in hnd):
-        return True
-        
-    if any(k in tokens_actor for k in ['genoveva', 'huerta']) and ('huerta' in aut or 'huerta' in hnd):
-        return True
-
     return False
 
-def es_institucional(autor, handle):
+def es_institucional_universal(autor, handle):
     texto = (str(autor) + " " + str(handle))
     texto_norm = normalizar_cadena(texto)
-    for p in PATRONES_INSTITUCIONALES:
+    for p in PATRONES_INSTITUCIONALES_GENERICOS:
         if re.search(p, texto_norm):
             return True
     return False
@@ -138,13 +127,14 @@ def limpiar_dataframe_redes_automatico(df_raw, actor_nombre_target):
         handle = str(row.get('Author handle (@username)', row.get('Handle', ''))).strip()
         detalle = str(row.get('Contenido', row.get('Detail', row.get('Titulo', '')))).strip()
         
-        if es_cuenta_del_actor(autor, handle, actor_nombre_target):
+        if es_cuenta_del_actor_universal(autor, handle, actor_nombre_target):
             return True
-        if es_institucional(autor, handle):
+            
+        if es_institucional_universal(autor, handle):
             return True
         
         det_lower = quitar_acentos(detalle)
-        if any(p in det_lower for p in ['mis ahijados andres y alexander', 'con toda la actitud #graciasdios', 'primeracomunion']):
+        if any(p in det_lower for p in ['mis ahijados', 'con toda la actitud #graciasdios', 'primeracomunion', 'en familia festejando']):
             return True
             
         return False
@@ -251,12 +241,13 @@ def limpiar_texto(texto):
 
 def clasificar_lote_con_ia(lista_notas, actor_nombre):
     prompt = f"""
-Clasifica las siguientes notas respecto al actor político: "{actor_nombre}".
+Clasifica las siguientes publicaciones respecto al actor político: "{actor_nombre}".
+Aplica estrictamente las reglas universales de clasificación política del sistema.
 
 NOTAS A EVALUAR:
 {json.dumps(lista_notas, ensure_ascii=False)}
 
-Responde ÚNICAMENTE un JSON válido con este formato:
+Responde ÚNICAMENTE un JSON válido con este formato exacto:
 [
   {{"id": 0, "sentimiento": "POSITIVA"}},
   {{"id": 1, "sentimiento": "NEGATIVA"}}
@@ -279,8 +270,14 @@ Responde ÚNICAMENTE un JSON válido con este formato:
         res_map = {}
         for item in lista_notas:
             t = item["texto"].lower()
-            es_logro_seguridad = any(k in t for k in ["disminuye 10", "bajan 10", "reduccion de 10", "cae 10", "menos delitos"])
-            if not es_logro_seguridad and any(k in t for k in ["asalto en ", "robo de llantas", "daño patrimonial", "317 millones", "ase", "nepotismo", "desfalco", "desplante", "inseguridad", "se manifestaron", "abandonaron"]):
+            es_logro_disminucion = any(k in t for k in ["disminuye", "disminución", "bajan", "reduccion", "cae", "a la baja"]) and any(k in t for k in ["delito", "robo", "incidencia", "homicidio"])
+            es_acuerdo_laboral = any(k in t for k in ["sindicato", "convenio", "acuerdo laboral", "prestaciones", "condiciones de trabajo"])
+            
+            if not es_logro_disminucion and not es_acuerdo_laboral and any(k in t for k in [
+                "asalto", "asesinato", "homicidio", "robo de ", "cristalazo", "daño patrimonial", "desvío de recursos",
+                "auditoría", "nepotismo", "desfalco", "desplante", "se manifestaron", "protestan", "exigen",
+                "ebrio", "borracho", "charolazo", "prepotencia", "prepotente", "bloqueo", "baches", "acarreados"
+            ]):
                 res_map[item["id"]] = "NEGATIVA"
             else:
                 res_map[item["id"]] = "POSITIVA"
@@ -317,7 +314,7 @@ def determinar_sentimiento_df(df_data, actor_nombre_target, es_tradicionales):
     progreso.empty()
     return sentimientos_finales
 
-# --- GENERADOR DEL RESUMEN EJECUTIVO EN PÁRRAFOS CONCISOS Y ESTRUCTURADOS ---
+# --- GENERADOR UNIVERSAL DEL RESUMEN EJECUTIVO EN PÁRRAFOS CONCISOS ---
 def extraer_resumen_temas_real(df_data, actor_nombre):
     pos_df = df_data[df_data["sentimiento_final"].isin(["POSITIVA", "NEUTRA"])]
     neg_df = df_data[df_data["sentimiento_final"] == "NEGATIVA"]
@@ -335,31 +332,31 @@ def extraer_resumen_temas_real(df_data, actor_nombre):
             break
 
     prompt = f"""
-Eres un analista senior de comunicación política y redacción ejecutiva en Puebla.
+Eres un analista senior de comunicación política y redacción ejecutiva.
 Redacta el "RESUMEN" ejecutivo oficial para el actor político: "{actor_nombre}".
 
 REGLAS DE FORMATO (OBLIGATORIAS):
 1. Cada punto DEBE ser exactamente de 1 solo párrafo fluido (de 2 a 3 líneas).
 2. Estructura exacta de cada viñeta:
-   [Número]. [Título del Eje Temático Específico]: [Síntesis ejecutiva explicando los hechos con nombres de programas, lugares, obras o instituciones].
-3. Prohibido copiar o pegar párrafos completos de las noticias originales. Debes resumir y redactar con elegancia institucional.
+   [Número]. [Título del Eje Temático Específico en Mayúsculas y Minúsculas]: [Síntesis ejecutiva explicando los hechos con nombres de programas, lugares, obras o instituciones mencionados en las notas].
+3. Prohibido copiar o pegar párrafos completos de las noticias originales. Debes resumir y redactar con estilo formal e institucional.
 4. Genera de 1 a 3 puntos en 'Temas relevantes informativos' y de 1 a 3 puntos en 'Temas negativos'.
 5. Si no hay notas negativas ({len(neg_textos)} negativas registradas), escribe obligatoriamente:
    1. No se registraron temas negativos en el periodo analizado.
 
-EJEMPLO EXACTO DE SALIDA:
+EJEMPLO DE ESTRUCTURA:
 Temas relevantes informativos
-1. Turismo Inteligente y Proyección Internacional: Presentación de la plataforma digital VisitCholula.mx potenciada con Inteligencia Artificial y designación de San Pedro Cholula como sede de 'Ventana México 2027' en el marco del Tianguis Turístico.
-2. Obras Públicas y Oportunidades Educativas: Inauguración de la Expo Universidades 2026 con 35 instituciones de educación superior en la Plaza de la Concordia y arranque de pavimentaciones en San Juan Tlautla y San Sebastián Tepalcatepec.
+1. [Eje Temático Positivo 1]: [Síntesis ejecutiva de 2 a 3 líneas de los hechos].
+2. [Eje Temático Positivo 2]: [Síntesis ejecutiva de 2 a 3 líneas de los hechos].
 
 Temas negativos
-1. Protestas Vecinales en Santiago Momoxpan: Manifestación de habitantes en la presidencia auxiliar acusando abandono gubernamental y presupuesto insuficiente para bacheo.
+1. [Eje Temático Negativo 1 o Leyenda si no hay]: [Síntesis ejecutiva de 2 a 3 líneas de las controversias].
 
-NOTICIAS POSITIVAS DISPONIBLES:
-{str(pos_textos[:25])}
+NOTICIAS POSITIVAS DISPONIBLES ({len(pos_textos)} notas):
+{str(pos_textos[:30])}
 
-NOTICIAS NEGATIVAS DISPONIBLES:
-{str(neg_textos[:20])}
+NOTICIAS NEGATIVAS DISPONIBLES ({len(neg_textos)} notas):
+{str(neg_textos[:25])}
 """
     try:
         res_ia = model_redactor.generate_content(prompt).text.strip()
@@ -661,7 +658,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     buffer.seek(0)
     return buffer
 
-# --- INTERFAZ STREAMLIT LIMPIA Y DIRECTA ---
+# --- INTERFAZ STREAMLIT ---
 
 tipo_analisis = st.radio(
     "¿Qué tipo de archivo vas a analizar?",
@@ -679,12 +676,12 @@ if tipo_analisis == "Redes Sociales":
     )
     actor_nombre_in = st.text_input(
         "Nombre y Partido del Actor Político",
-        placeholder="ej. TONANTZIN FERNÁNDEZ (MORENA)",
+        placeholder="ej. ALEJANDRO ARMENTA (MORENA), EDUARDO RIVERA (PAN), etc.",
     ).strip().upper()
 
     if uploaded_file and actor_nombre_in:
         if st.button("Generar Reporte Oficial", type="primary"):
-            with st.spinner("Limpiando cuentas oficiales y procesando con IA..."):
+            with st.spinner("Limpiando cuentas oficiales y procesando todas las notas con IA universal..."):
                 try:
                     dict_h = cargar_archivo_seguro(uploaded_file)
                     df_redes = list(dict_h.values())[0]
