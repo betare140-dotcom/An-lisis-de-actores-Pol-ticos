@@ -28,8 +28,8 @@ st.set_page_config(
 
 st.title("📊 Generador de Monitoreo de Actores Políticos")
 st.write(
-    "Sistema universal de monitoreo político multi-archivo para cualquier perfil o cargo público. "
-    "Permite cargar simultáneamente archivos de Radio/TV, Portales Web y Redes Sociales para generar un solo reporte unificado por candidato."
+    "Sistema universal de monitoreo político para cualquier perfil o cargo público. "
+    "Permite procesar archivos individuales o fusionar múltiples archivos (Radio/TV, Portales Web y Redes) en un solo reporte oficial consolidado."
 )
 
 # API Key Pre-integrada
@@ -181,25 +181,32 @@ def limpiar_dataframe_redes_automatico(df_raw, actor_nombre_target):
 
 def cargar_archivo_seguro(file):
     try:
-        return pd.read_excel(file, sheet_name=None)
+        file_bytes = file.read()
+        file.seek(0)
+    except Exception:
+        file_bytes = file
+
+    # 1. Intentar como Excel usando openpyxl
+    try:
+        return pd.read_excel(io.BytesIO(file_bytes), sheet_name=None)
     except Exception:
         pass
 
+    # 2. Intentar como CSV UTF-8
     try:
-        file.seek(0)
-        df_csv = pd.read_csv(file, on_bad_lines="skip")
+        df_csv = pd.read_csv(io.BytesIO(file_bytes), on_bad_lines="skip")
         return {"Reporte": df_csv}
     except Exception:
         pass
 
+    # 3. Intentar como CSV Latin-1
     try:
-        file.seek(0)
-        df_csv = pd.read_csv(file, encoding="latin1", on_bad_lines="skip")
+        df_csv = pd.read_csv(io.BytesIO(file_bytes), encoding="latin1", on_bad_lines="skip")
         return {"Reporte": df_csv}
     except Exception:
         pass
 
-    raise Exception("No se pudo leer el archivo. Asegúrate de que sea un archivo Excel (.xlsx/.xls) o CSV válido.")
+    return {}
 
 def obtener_campo(row, lista_cols):
     for c in lista_cols:
@@ -305,8 +312,6 @@ def reparar_desfase_columnas_excel(df):
         
     cols = [str(c).strip() for c in df.columns]
     
-    # Detectar si la columna 'Hora' contiene nombres de entidades federativas
-    # o si 'Alcance' contiene enlaces web debido a un desplazamiento por columna extra
     es_desfasado_por_hora = False
     if "Hora" in cols:
         sample_hora = df["Hora"].dropna().astype(str).head(10).tolist()
@@ -334,7 +339,7 @@ def reparar_desfase_columnas_excel(df):
             if idx_col < raw_matrix.shape:
                 df_reparado[col_name] = raw_matrix[:, idx_col]
             else:
-                df_reparado[col_name] = np.nan
+                df_reparado[col_name] = ""
                 
         df_reparado["Hora"] = ""
         return df_reparado
@@ -902,12 +907,90 @@ else:
     )
 
     if uploaded_files and len(uploaded_files) > 0:
-        try:
-            # 1. Unificar todos los archivos y mapear hojas por candidato
-            candidatos_unificados = {}
+        candidatos_unificados = {}
 
-            for file in uploaded_files:
-                dict_hojas = cargar_archivo_seguro(file)
+        for file_item in uploaded_files:
+            try:
+                dict_hojas = cargar_archivo_seguro(file_item)
+                for h_name, df_h in dict_hojas.items():
+                    if df_h is None or df_h.empty:
+                        continue
+                    
+                    if 'Menu' in df_h.columns and len(df_h['Menu'].dropna()) > 0:
+                        nombre_raw = str(df_h['Menu'].dropna().iloc[0]).strip()
+                    else:
+                        nombre_raw = h_name
+                    
+                    candidato_canon = normalizar_nombre_candidato(nombre_raw)
+                    
+                    if candidato_canon not in candidatos_unificados:
+                        candidatos_unificados[candidato_canon] = []
+                    candidatos_unificados[candidato_canon].append(df_h)
+            except Exception as e:
+                st.warning(f"No se pudo procesar una de las hojas de {file_item.name}: {str(e)}")
 
-        except Exception as e:
-            st.error(f"Error procesando el archivo: {str(e)}")
+        candidatos_disponibles = sorted([c for c in candidatos_unificados.keys() if c and "SIN NOTAS" not in c])
+
+        if len(candidatos_disponibles) > 0:
+            st.success(f"✅ Se cargaron exitosamente {len(uploaded_files)} archivo(s) y se detectaron {len(candidatos_disponibles)} candidatos.")
+            st.markdown(f"**Candidatos detectados:** {', '.join(candidatos_disponibles)}")
+
+            st.write("---")
+            st.subheader("Opciones de Descarga:")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("### 📦 Descarga Masiva")
+                if st.button("Generar y Descargar TODOS los Reportes en .ZIP", type="primary", use_container_width=True):
+                    with st.spinner("Generando reportes consolidados para todos los candidatos..."):
+                        zip_buffer = io.BytesIO()
+                        cnt_generados = 0
+                        
+                        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                            for cand_name in candidatos_disponibles:
+                                lista_dfs = candidatos_unificados[cand_name]
+                                df_total_candidato = pd.concat(lista_dfs, ignore_index=True)
+
+                                buf = crear_doc_desde_hoja(df_total_candidato, cand_name, es_redes_sociales=False)
+                                if buf is not None:
+                                    doc_bytes = buf.getvalue()
+                                    fname = f"Reporte_{cand_name.replace(' ', '_')}.docx"
+                                    zip_file.writestr(fname, doc_bytes)
+                                    cnt_generados += 1
+
+                        zip_buffer.seek(0)
+                        if cnt_generados > 0:
+                            st.success(f"¡Se generaron con éxito {cnt_generados} reportes consolidados!")
+                            st.download_button(
+                                label="📥 Descargar Archivo .ZIP",
+                                data=zip_buffer,
+                                file_name="Reportes_Monitoreo_Consolidados_Completos.zip",
+                                mime="application/zip",
+                                use_container_width=True
+                            )
+                        else:
+                            st.warning("No se encontraron candidatos con notas activas.")
+
+            with col2:
+                st.markdown("### 📄 Descarga Individual")
+                cand_sel = st.selectbox("Selecciona un candidato:", candidatos_disponibles)
+                if st.button(f"Generar Reporte de {cand_sel}", use_container_width=True):
+                    with st.spinner(f"Consolidando notas para {cand_sel}..."):
+                        lista_dfs = candidatos_unificados[cand_sel]
+                        df_total_candidato = pd.concat(lista_dfs, ignore_index=True)
+                        
+                        buf = crear_doc_desde_hoja(df_total_candidato, cand_sel, es_redes_sociales=False)
+                        if buf is not None:
+                            st.success(f"¡Reporte consolidado listo para '{cand_sel}'!")
+                            st.download_button(
+                                label=f"📥 Descargar Word de {cand_sel}",
+                                data=buf,
+                                file_name=f"Reporte_{cand_sel.replace(' ', '_')}.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True
+                            )
+                        else:
+                            st.warning(f"El candidato '{cand_sel}' no contiene notas registradas.")
+        else:
+            st.warning("No se detectaron candidatos con notas válidas en los archivos seleccionados.")
