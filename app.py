@@ -434,6 +434,24 @@ NOTICIAS NEGATIVAS DISPONIBLES ({len(neg_textos)} notas):
 
     return "\n".join(lineas_res)
 
+def obtener_link_inteligente(row):
+    # 1. Prioridad para Portales / Web / Redes: Link directo del medio si existe
+    link_url_medio = obtener_campo(row, ["Link URL Medio", "URL Medio", "Link Medio", "URL"])
+    if link_url_medio and str(link_url_medio).startswith("http") and "hanakua.mx/Testigo" not in str(link_url_medio):
+        return str(link_url_medio).strip()
+        
+    # 2. Prioridad para Radio / TV: Link de la nota en Hanakua ([https://next.hanakua.mx/Notas?id=](https://next.hanakua.mx/Notas?id=)...)
+    link_de_nota = obtener_campo(row, ["Link de Nota", "Link Nota", "URL Nota"])
+    if link_de_nota and str(link_de_nota).startswith("http") and "hanakua.mx/Testigo" not in str(link_de_nota):
+        return str(link_de_nota).strip()
+        
+    # 3. Respaldo general (excluyendo siempre Testigo)
+    link_generico = obtener_campo(row, ["Enlace", "Link"])
+    if link_generico and str(link_generico).startswith("http") and "hanakua.mx/Testigo" not in str(link_generico):
+        return str(link_generico).strip()
+        
+    return ""
+
 def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     if df_hoja is None or df_hoja.empty:
         return None
@@ -626,7 +644,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                     autor = obtener_campo(row, ["Autor", "Author name", "Fuente", "Media name", "Programa"])
                     handle = obtener_campo(row, ["Author handle (@username)", "Handle", "Username"])
                     detalle = obtener_campo(row, ["Contenido", "Detail", "Summary", "Síntesis", "Sintesis", "Titulo", "Título", "Title", "Encabezado"])
-                    link = obtener_campo(row, ["Link de Nota", "Link URL Medio", "URL", "Enlace", "Link"])
+                    link = obtener_link_inteligente(row)
 
                     p_a = doc.add_paragraph()
                     p_a.paragraph_format.space_before = Pt(4)
@@ -653,7 +671,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                     autor = obtener_campo(row, ["Autor", "Author name", "Fuente", "Media name", "Programa"])
                     handle = obtener_campo(row, ["Author handle (@username)", "Handle", "Username"])
                     detalle = obtener_campo(row, ["Contenido", "Detail", "Summary", "Síntesis", "Sintesis", "Titulo", "Título", "Title", "Encabezado"])
-                    link = obtener_campo(row, ["Link de Nota", "Link URL Medio", "URL", "Enlace", "Link"])
+                    link = obtener_link_inteligente(row)
 
                     p_a = doc.add_paragraph()
                     p_a.paragraph_format.space_before = Pt(4)
@@ -686,7 +704,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                             autor = obtener_campo(row, ["Autor", "Author name", "Programa", "Conductor"])
                             hora = obtener_campo(row, ["Hora", "Hour", "Time", "Hora de Transmisión", "Hora de Transmision"])
                             titulo = obtener_campo(row, ["Titulo", "Título", "Contenido", "Detail", "Summary", "Síntesis", "Sintesis", "Encabezado", "Nota"])
-                            link = obtener_campo(row, ["Link de Nota", "Link URL Medio", "URL", "Enlace", "Link"])
+                            link = obtener_link_inteligente(row)
 
                             p_a = doc.add_paragraph()
                             p_a.paragraph_format.space_before = Pt(4)
@@ -727,7 +745,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                             autor = obtener_campo(row, ["Autor", "Author name", "Programa", "Conductor"])
                             hora = obtener_campo(row, ["Hora", "Hour", "Time", "Hora de Transmisión", "Hora de Transmision"])
                             titulo = obtener_campo(row, ["Titulo", "Título", "Contenido", "Detail", "Summary", "Síntesis", "Sintesis", "Encabezado", "Nota"])
-                            link = obtener_campo(row, ["Link de Nota", "Link URL Medio", "URL", "Enlace", "Link"])
+                            link = obtener_link_inteligente(row)
 
                             p_a = doc.add_paragraph()
                             p_a.paragraph_format.space_before = Pt(4)
