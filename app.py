@@ -174,7 +174,7 @@ def obtener_campo(row, lista_cols):
             if v and v != "nan" and v != "None":
                 return v
         for col_existente in row.index:
-            if str(col_existente).strip().lower() == c.lower():
+            if str(col_existente).strip().lower() == c.lower() or quitar_acentos(col_existente) == quitar_acentos(c):
                 v = str(row[col_existente]).strip()
                 if v and v != "nan" and v != "None":
                     return v
@@ -185,7 +185,7 @@ def obtener_columna_serie(df_data, lista_posibles_cols):
         if c in df_data.columns:
             return df_data[c]
         for col_existente in df_data.columns:
-            if str(col_existente).strip().lower() == c.lower():
+            if str(col_existente).strip().lower() == c.lower() or quitar_acentos(col_existente) == quitar_acentos(c):
                 return df_data[col_existente]
     return pd.Series([""] * len(df_data), index=df_data.index)
 
@@ -203,6 +203,8 @@ def parsear_fecha_perfecta(val):
             parts = s_date.split("-")
             if len(parts) == 3 and len(parts[0]) == 4:
                 return datetime(int(parts[0]), int(parts), int(parts))
+            elif len(parts) == 3 and len(parts) == 4:
+                return datetime(int(parts), int(parts), int(parts[0]))
         except Exception:
             pass
 
@@ -238,6 +240,23 @@ def limpiar_texto(texto):
         if line.strip()
     ]
     return "\n".join(lineas)
+
+def estandarizar_categoria_medio(m_type_raw):
+    t = str(m_type_raw).strip()
+    t_norm = quitar_acentos(t)
+    if "tele" in t_norm or "tv" in t_norm:
+        return "TELEVISIÓN"
+    elif "rad" in t_norm or "fm" in t_norm or "am" in t_norm:
+        return "RADIO"
+    elif any(k in t_norm for k in ["portal", "web", "online", "internet", "digital", "comun"]):
+        return "PORTALES DIGITALES"
+    elif any(k in t_norm for k in ["prensa", "periodico", "diario", "impreso"]):
+        return "PRENSA LOCAL"
+    elif any(k in t_norm for k in ["columna", "opinion"]):
+        return "COLUMNAS"
+    elif any(k in t_norm for k in ["redes", "social", "twitter", "facebook", "instagram", "tiktok", "youtube", "x"]):
+        return "REDES SOCIALES"
+    return "PORTALES DIGITALES"
 
 def clasificar_lote_con_ia(lista_notas, actor_nombre):
     prompt = f"""
@@ -285,9 +304,14 @@ Responde ÚNICAMENTE un JSON válido con este formato exacto:
 
 def determinar_sentimiento_df(df_data, actor_nombre_target, es_tradicionales):
     if es_tradicionales:
-        if any(c in df_data.columns for c in ["Sentimiento", "Sentiment", "Sentimiento de la Nota"]):
-            sent_col = obtener_columna_serie(df_data, ["Sentimiento", "Sentiment", "Sentimiento de la Nota"])
-            return sent_col.apply(lambda s: "NEGATIVA" if "negat" in str(s).lower() else "POSITIVA").tolist()
+        sent_col_name = None
+        for col_name in df_data.columns:
+            if quitar_acentos(col_name) in ["sentimiento", "sentiment", "sentimiento de la nota", "tono", "sentimiento nota"]:
+                sent_col_name = col_name
+                break
+        if sent_col_name:
+            sent_series = df_data[sent_col_name].astype(str).str.lower()
+            return sent_series.apply(lambda s: "NEGATIVA" if any(k in s for k in ["negat", "critica", "contra"]) else "POSITIVA").tolist()
 
     sentimientos_finales = ["POSITIVA"] * len(df_data)
     lote_tamano = 15
@@ -301,7 +325,7 @@ def determinar_sentimiento_df(df_data, actor_nombre_target, es_tradicionales):
         lista_lote = []
         for local_id, idx in enumerate(sub_indices):
             row = df_data.loc[idx]
-            texto = obtener_campo(row, ["Contenido", "Detail", "Titulo", "Summary", "Síntesis", "Title"])
+            texto = obtener_campo(row, ["Contenido", "Detail", "Titulo", "Título", "Summary", "Síntesis", "Sintesis", "Title", "Encabezado", "Tema", "Nota"])
             lista_lote.append({"id": local_id, "texto": texto})
             
         res_map = clasificar_lote_con_ia(lista_lote, actor_nombre_target)
@@ -320,16 +344,22 @@ def extraer_resumen_temas_real(df_data, actor_nombre):
     neg_df = df_data[df_data["sentimiento_final"] == "NEGATIVA"]
 
     pos_textos = []
-    for col in ["Titulo", "Contenido", "Detail", "Summary"]:
-        if col in pos_df.columns:
-            pos_textos = [t for t in pos_df[col].dropna().astype(str).tolist() if "teaser" not in t.lower() and len(t.strip()) > 10]
-            break
+    columnas_posibles_texto = ["Titulo", "Título", "Contenido", "Detail", "Summary", "Síntesis", "Sintesis", "Encabezado", "Tema", "Nota", "Title"]
+    
+    for col in columnas_posibles_texto:
+        if col in pos_df.columns or any(quitar_acentos(c) == quitar_acentos(col) for c in pos_df.columns):
+            serie_t = obtener_columna_serie(pos_df, [col])
+            pos_textos = [t for t in serie_t.dropna().astype(str).tolist() if "teaser" not in t.lower() and len(t.strip()) > 10]
+            if len(pos_textos) > 0:
+                break
 
     neg_textos = []
-    for col in ["Titulo", "Contenido", "Detail", "Summary"]:
-        if col in neg_df.columns:
-            neg_textos = [t for t in neg_df[col].dropna().astype(str).tolist() if "teaser" not in t.lower() and len(t.strip()) > 10]
-            break
+    for col in columnas_posibles_texto:
+        if col in neg_df.columns or any(quitar_acentos(c) == quitar_acentos(col) for c in neg_df.columns):
+            serie_t = obtener_columna_serie(neg_df, [col])
+            neg_textos = [t for t in serie_t.dropna().astype(str).tolist() if "teaser" not in t.lower() and len(t.strip()) > 10]
+            if len(neg_textos) > 0:
+                break
 
     prompt = f"""
 Eres un analista senior de comunicación política y redacción ejecutiva.
@@ -410,7 +440,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
         return None
 
     serie_fechas_raw = obtener_columna_serie(
-        df_filtrado, ["Publish date", "Fecha", "Date", "Fecha de publicación"]
+        df_filtrado, ["Publish date", "Fecha", "Date", "Fecha de publicación", "Fecha de publicacion"]
     )
     df_filtrado["fecha_dt"] = serie_fechas_raw.apply(parsear_fecha_perfecta)
 
@@ -440,17 +470,18 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     negativas_cnt = len(df_filtrado[df_filtrado["sentimiento_final"] == "NEGATIVA"])
     total_cnt = len(df_filtrado)
 
-    serie_media = obtener_columna_serie(
+    # Identificación estandarizada de medio para tradicionales
+    serie_media_raw = obtener_columna_serie(
         df_filtrado,
-        ["Tipo de Medio", "Fuente", "Media type", "Media Type", "Medio", "Nombre del Medio", "Canal"]
+        ["Tipo de Medio", "Fuente", "Media type", "Media Type", "Medio", "Nombre del Medio", "Canal", "Tipo de Nota"]
     )
+    df_filtrado["categoria_medio_std"] = serie_media_raw.apply(estandarizar_categoria_medio) if not es_redes_sociales else "REDES SOCIALES"
 
-    redes_cnt = total_cnt if es_redes_sociales else 0
-    tv_cnt = serie_media.astype(str).str.contains("Tele", case=False, na=False).sum() if not es_redes_sociales else 0
-    rad_cnt = serie_media.astype(str).str.contains("Rad", case=False, na=False).sum() if not es_redes_sociales else 0
-    portales_cnt = serie_media.astype(str).str.contains("Portal|Web|Online|Internet", case=False, na=False).sum() if not es_redes_sociales else 0
-    prensa_cnt = serie_media.astype(str).str.contains("Prensa|Diario|Periódico", case=False, na=False).sum() if not es_redes_sociales else 0
-    columnas_cnt = serie_media.astype(str).str.contains("Columna|Opinión", case=False, na=False).sum() if not es_redes_sociales else 0
+    tv_cnt = (df_filtrado["categoria_medio_std"] == "TELEVISIÓN").sum() if not es_redes_sociales else 0
+    rad_cnt = (df_filtrado["categoria_medio_std"] == "RADIO").sum() if not es_redes_sociales else 0
+    portales_cnt = (df_filtrado["categoria_medio_std"] == "PORTALES DIGITALES").sum() if not es_redes_sociales else 0
+    prensa_cnt = (df_filtrado["categoria_medio_std"] == "PRENSA LOCAL").sum() if not es_redes_sociales else 0
+    columnas_cnt = (df_filtrado["categoria_medio_std"] == "COLUMNAS").sum() if not es_redes_sociales else 0
 
     doc = Document()
     for section in doc.sections:
@@ -556,6 +587,8 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     p_des.paragraph_format.space_before = Pt(12)
     add_run_verdana(p_des, "DESGLOSE", bold=True, size_pt=11)
 
+    orden_medios_oficial = ["TELEVISIÓN", "RADIO", "PORTALES DIGITALES", "PRENSA LOCAL", "COLUMNAS", "REDES SOCIALES"]
+
     for fecha_dt_val, sub_df in df_filtrado.groupby("fecha_dt", sort=True):
         fecha_item = fecha_dt_val.strftime("%d.%m.%2y")
 
@@ -577,8 +610,35 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                 for _, row in pos_df.iterrows():
                     autor = obtener_campo(row, ["Autor", "Author name", "Fuente", "Media name", "Programa"])
                     handle = obtener_campo(row, ["Author handle (@username)", "Handle", "Username"])
-                    detalle = obtener_campo(row, ["Contenido", "Detail", "Summary", "Síntesis", "Titulo", "Title"])
-                    link = obtener_campo(row, ["Link URL Medio", "Link a Testigo", "Link de Nota", "URL", "Link", "Enlace"])
+                    detalle = obtener_campo(row, ["Contenido", "Detail", "Summary", "Síntesis", "Sintesis", "Titulo", "Título", "Title", "Encabezado"])
+                    link = obtener_campo(row, ["Link de Nota", "Link URL Medio", "URL", "Enlace", "Link"])
+
+                    p_a = doc.add_paragraph()
+                    p_a.paragraph_format.space_before = Pt(4)
+                    p_a.paragraph_format.space_after = Pt(1)
+                    if handle and not handle.startswith("@"): handle = f"@{handle}"
+                    add_run_verdana(p_a, f"{autor} {handle}".strip() if handle else autor, bold=True, size_pt=10)
+
+                    p_d = doc.add_paragraph()
+                    p_d.paragraph_format.space_after = Pt(2)
+                    add_run_verdana(p_d, limpiar_texto(detalle), bold=False, size_pt=9.5)
+
+                    if link:
+                        p_l = doc.add_paragraph()
+                        p_l.paragraph_format.space_after = Pt(6)
+                        add_run_verdana(p_l, link, bold=False, size_pt=9, color_rgb=RGBColor(0, 102, 204), underline=True)
+
+            if len(neg_df) > 0:
+                p_neg_hdr = doc.add_paragraph()
+                p_neg_hdr.paragraph_format.space_before = Pt(6)
+                p_neg_hdr.paragraph_format.space_after = Pt(4)
+                add_run_verdana(p_neg_hdr, f"NEGATIVAS: {len(neg_df)}", bold=True, size_pt=10, color_rgb=RGBColor(180, 0, 0))
+
+                for _, row in neg_df.iterrows():
+                    autor = obtener_campo(row, ["Autor", "Author name", "Fuente", "Media name", "Programa"])
+                    handle = obtener_campo(row, ["Author handle (@username)", "Handle", "Username"])
+                    detalle = obtener_campo(row, ["Contenido", "Detail", "Summary", "Síntesis", "Sintesis", "Titulo", "Título", "Title", "Encabezado"])
+                    link = obtener_campo(row, ["Link de Nota", "Link URL Medio", "URL", "Enlace", "Link"])
 
                     p_a = doc.add_paragraph()
                     p_a.paragraph_format.space_before = Pt(4)
@@ -596,62 +656,82 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                         add_run_verdana(p_l, link, bold=False, size_pt=9, color_rgb=RGBColor(0, 102, 204), underline=True)
 
         else:
+            # MEDIOS TRADICIONALES - POSITIVAS AGRUPADAS POR CANAL
             if len(pos_df) > 0:
-                grupos = pos_df.groupby(lambda i: obtener_campo(pos_df.loc[i], ["Tipo de Medio", "Tipo de Nota", "Fuente"]) or "MEDIOS")
-                for m_type, grupo_m in grupos:
-                    p_m = doc.add_paragraph()
-                    p_m.paragraph_format.space_before = Pt(4)
-                    p_m.paragraph_format.space_after = Pt(4)
-                    heading_base = "PORTALES DIGITALES" if ("Común" in m_type or "Internet" in m_type) else m_type.upper()
-                    add_run_verdana(p_m, f"{heading_base}: {len(grupo_m)}", bold=True, size_pt=10)
+                for cat_nombre in orden_medios_oficial:
+                    sub_pos_cat = pos_df[pos_df["categoria_medio_std"] == cat_nombre]
+                    if len(sub_pos_cat) > 0:
+                        p_m = doc.add_paragraph()
+                        p_m.paragraph_format.space_before = Pt(4)
+                        p_m.paragraph_format.space_after = Pt(4)
+                        add_run_verdana(p_m, f"{cat_nombre}: {len(sub_pos_cat)}", bold=True, size_pt=10)
 
-                    for _, row in grupo_m.iterrows():
-                        medio = obtener_campo(row, ["Nombre del Medio", "Fuente", "Media name"])
-                        autor = obtener_campo(row, ["Autor", "Author name", "Programa"])
-                        titulo = obtener_campo(row, ["Titulo", "Contenido", "Detail", "Summary"])
-                        link = obtener_campo(row, ["Link URL Medio", "Link a Testigo", "Link de Nota", "URL", "Link", "Enlace"])
+                        for _, row in sub_pos_cat.iterrows():
+                            medio = obtener_campo(row, ["Nombre del Medio", "Fuente", "Media name", "Medio"])
+                            autor = obtener_campo(row, ["Autor", "Author name", "Programa", "Conductor"])
+                            hora = obtener_campo(row, ["Hora", "Hour", "Time", "Hora de Transmisión", "Hora de Transmision"])
+                            titulo = obtener_campo(row, ["Titulo", "Título", "Contenido", "Detail", "Summary", "Síntesis", "Sintesis", "Encabezado", "Nota"])
+                            link = obtener_campo(row, ["Link de Nota", "Link URL Medio", "URL", "Enlace", "Link"])
 
-                        p_a = doc.add_paragraph()
-                        p_a.paragraph_format.space_before = Pt(4)
-                        p_a.paragraph_format.space_after = Pt(1)
-                        cabecera = f"{medio} - {autor}" if (autor and autor not in ["Redacción", "Staff", "Online"]) else medio
-                        add_run_verdana(p_a, cabecera, bold=True, size_pt=10)
+                            p_a = doc.add_paragraph()
+                            p_a.paragraph_format.space_before = Pt(4)
+                            p_a.paragraph_format.space_after = Pt(1)
+                            cabecera = f"{medio} - {autor}" if (autor and autor not in ["Redacción", "Staff", "Online", medio]) else medio
+                            add_run_verdana(p_a, cabecera, bold=True, size_pt=10)
 
-                        p_d = doc.add_paragraph()
-                        p_d.paragraph_format.space_after = Pt(2)
-                        add_run_verdana(p_d, limpiar_texto(titulo), bold=False, size_pt=9.5)
+                            cuerpo_texto = limpiar_texto(titulo)
+                            if hora and not cuerpo_texto.lower().startswith(hora.lower()):
+                                cuerpo_texto = f"{hora} {cuerpo_texto}".strip()
 
-                        if link:
-                            p_l = doc.add_paragraph()
-                            p_l.paragraph_format.space_after = Pt(6)
-                            add_run_verdana(p_l, link, bold=False, size_pt=9, color_rgb=RGBColor(0, 102, 204), underline=True)
+                            p_d = doc.add_paragraph()
+                            p_d.paragraph_format.space_after = Pt(2)
+                            add_run_verdana(p_d, cuerpo_texto, bold=False, size_pt=9.5)
 
-        if len(neg_df) > 0:
-            p_neg_hdr = doc.add_paragraph()
-            p_neg_hdr.paragraph_format.space_before = Pt(6)
-            p_neg_hdr.paragraph_format.space_after = Pt(4)
-            add_run_verdana(p_neg_hdr, f"NEGATIVAS: {len(neg_df)}", bold=True, size_pt=10, color_rgb=RGBColor(180, 0, 0))
+                            if link:
+                                p_l = doc.add_paragraph()
+                                p_l.paragraph_format.space_after = Pt(6)
+                                add_run_verdana(p_l, link, bold=False, size_pt=9, color_rgb=RGBColor(0, 102, 204), underline=True)
 
-            for _, row in neg_df.iterrows():
-                medio = obtener_campo(row, ["Nombre del Medio", "Fuente", "Media name"])
-                autor = obtener_campo(row, ["Autor", "Author name", "Programa"])
-                titulo = obtener_campo(row, ["Titulo", "Contenido", "Detail", "Summary"])
-                link = obtener_campo(row, ["Link URL Medio", "Link a Testigo", "Link de Nota", "URL", "Link", "Enlace"])
+            # MEDIOS TRADICIONALES - NEGATIVAS AGRUPADAS POR CANAL
+            if len(neg_df) > 0:
+                p_neg_hdr = doc.add_paragraph()
+                p_neg_hdr.paragraph_format.space_before = Pt(6)
+                p_neg_hdr.paragraph_format.space_after = Pt(4)
+                add_run_verdana(p_neg_hdr, f"NEGATIVAS: {len(neg_df)}", bold=True, size_pt=10, color_rgb=RGBColor(180, 0, 0))
 
-                p_a = doc.add_paragraph()
-                p_a.paragraph_format.space_before = Pt(4)
-                p_a.paragraph_format.space_after = Pt(1)
-                cabecera = f"{medio} - {autor}" if (autor and autor not in ["Redacción", "Staff", "Online"]) else medio
-                add_run_verdana(p_a, cabecera, bold=True, size_pt=10)
+                for cat_nombre in orden_medios_oficial:
+                    sub_neg_cat = neg_df[neg_df["categoria_medio_std"] == cat_nombre]
+                    if len(sub_neg_cat) > 0:
+                        p_sub_neg = doc.add_paragraph()
+                        p_sub_neg.paragraph_format.space_before = Pt(4)
+                        p_sub_neg.paragraph_format.space_after = Pt(4)
+                        add_run_verdana(p_sub_neg, f"{cat_nombre}: {len(sub_neg_cat)}", bold=True, size_pt=10, color_rgb=RGBColor(180, 0, 0))
 
-                p_d = doc.add_paragraph()
-                p_d.paragraph_format.space_after = Pt(2)
-                add_run_verdana(p_d, limpiar_texto(titulo), bold=False, size_pt=9.5)
+                        for _, row in sub_neg_cat.iterrows():
+                            medio = obtener_campo(row, ["Nombre del Medio", "Fuente", "Media name", "Medio"])
+                            autor = obtener_campo(row, ["Autor", "Author name", "Programa", "Conductor"])
+                            hora = obtener_campo(row, ["Hora", "Hour", "Time", "Hora de Transmisión", "Hora de Transmision"])
+                            titulo = obtener_campo(row, ["Titulo", "Título", "Contenido", "Detail", "Summary", "Síntesis", "Sintesis", "Encabezado", "Nota"])
+                            link = obtener_campo(row, ["Link de Nota", "Link URL Medio", "URL", "Enlace", "Link"])
 
-                if link:
-                    p_l = doc.add_paragraph()
-                    p_l.paragraph_format.space_after = Pt(6)
-                    add_run_verdana(p_l, link, bold=False, size_pt=9, color_rgb=RGBColor(0, 102, 204), underline=True)
+                            p_a = doc.add_paragraph()
+                            p_a.paragraph_format.space_before = Pt(4)
+                            p_a.paragraph_format.space_after = Pt(1)
+                            cabecera = f"{medio} - {autor}" if (autor and autor not in ["Redacción", "Staff", "Online", medio]) else medio
+                            add_run_verdana(p_a, cabecera, bold=True, size_pt=10)
+
+                            cuerpo_texto = limpiar_texto(titulo)
+                            if hora and not cuerpo_texto.lower().startswith(hora.lower()):
+                                cuerpo_texto = f"{hora} {cuerpo_texto}".strip()
+
+                            p_d = doc.add_paragraph()
+                            p_d.paragraph_format.space_after = Pt(2)
+                            add_run_verdana(p_d, cuerpo_texto, bold=False, size_pt=9.5)
+
+                            if link:
+                                p_l = doc.add_paragraph()
+                                p_l.paragraph_format.space_after = Pt(6)
+                                add_run_verdana(p_l, link, bold=False, size_pt=9, color_rgb=RGBColor(0, 102, 204), underline=True)
 
     buffer = io.BytesIO()
     doc.save(buffer)
