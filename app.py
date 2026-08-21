@@ -66,7 +66,7 @@ REGLAS UNIVERSALES DE CLASIFICACIÓN:
 
 model_clasificador = genai.GenerativeModel(
     model_name="gemini-1.5-flash",
-    system_instruction=SYSTEM_PROMPT_UNIVERSAL,
+    system_instruction=SYSTEM_PROPARSE_UNIVERSAL if "SYSTEM_PROPARSE_UNIVERSAL" in locals() else SYSTEM_PROMPT_UNIVERSAL,
     generation_config={"temperature": 0.0}
 )
 
@@ -312,19 +312,18 @@ def reparar_desfase_columnas_excel(df):
         
     cols = [str(c).strip() for c in df.columns]
     
-    es_desfasado_por_hora = False
+    es_desfasado = False
     if "Hora" in cols:
         sample_hora = df["Hora"].dropna().astype(str).head(10).tolist()
-        no_son_horas = any(re.match(r'^(Puebla|M[eé]xico|Tlaxcala|Veracruz|CDMX|Hidalgo|Nacional|Internacional)$', v.strip(), re.I) for v in sample_hora)
-        if no_son_horas:
-            es_desfasado_por_hora = True
+        if any(re.match(r'^(Puebla|M[eé]xico|Tlaxcala|Veracruz|CDMX|Hidalgo|Nacional|Internacional)$', v.strip(), re.I) for v in sample_hora):
+            es_desfasado = True
             
-    if "Alcance" in cols and not es_desfasado_por_hora:
+    if "Alcance" in cols and not es_desfasado:
         sample_alcance = df["Alcance"].dropna().astype(str).head(10).tolist()
         if any(v.startswith("http") for v in sample_alcance):
-            es_desfasado_por_hora = True
+            es_desfasado = True
 
-    if es_desfasado_por_hora:
+    if es_desfasado:
         columnas_reales_ordenadas = [
             "ID Nota", "Menu", "Titulo", "Autor", "Fecha", 
             "Estado", "Pais", "Nombre del Medio", "Tipo de Medio", 
@@ -332,12 +331,12 @@ def reparar_desfase_columnas_excel(df):
             "Link URL Medio", "Link de Nota"
         ]
         
+        num_cols = len(df.columns)
         df_reparado = pd.DataFrame()
-        raw_matrix = df.values
         
-        for idx_col, col_name in enumerate(columnas_reales_ordenadas):
-            if idx_col < raw_matrix.shape:
-                df_reparado[col_name] = raw_matrix[:, idx_col]
+        for idx, col_name in enumerate(columnas_reales_ordenadas):
+            if idx < num_cols:
+                df_reparado[col_name] = df.iloc[:, idx].values
             else:
                 df_reparado[col_name] = ""
                 
