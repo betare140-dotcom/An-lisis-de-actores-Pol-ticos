@@ -28,8 +28,8 @@ st.set_page_config(
 
 st.title("📊 Generador de Monitoreo de Actores Políticos")
 st.write(
-    "Sistema universal de monitoreo político para cualquier perfil o cargo público. "
-    "Permite procesar archivos individuales o fusionar múltiples archivos (Radio/TV, Portales Web y Redes) en un solo reporte oficial consolidado."
+    "Sistema universal de monitoreo político multi-archivo para cualquier perfil o cargo público. "
+    "Permite cargar simultáneamente archivos de Radio/TV, Portales Web y Redes Sociales para generar un solo reporte oficial consolidado por candidato."
 )
 
 # API Key Pre-integrada
@@ -66,7 +66,7 @@ REGLAS UNIVERSALES DE CLASIFICACIÓN:
 
 model_clasificador = genai.GenerativeModel(
     model_name="gemini-1.5-flash",
-    system_instruction=SYSTEM_PROPARSE_UNIVERSAL if "SYSTEM_PROPARSE_UNIVERSAL" in locals() else SYSTEM_PROMPT_UNIVERSAL,
+    system_instruction=SYSTEM_PROMPT_UNIVERSAL,
     generation_config={"temperature": 0.0}
 )
 
@@ -537,10 +537,10 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     # Auto-reparar posibles desfasamientos humanos de columnas en Excel
     df_hoja = reparar_desfase_columnas_excel(df_hoja)
 
-    texto_primer_renglon = " ".join([str(v) for v in df_hoja.iloc[0].dropna().values]).strip() if len(df_hoja) > 0 else ""
-    texto_columnas = " ".join([str(c) for c in df_hoja.columns]).strip()
-
-    if "sin notas" in texto_primer_renglon.lower() or "sin notas" in texto_columnas.lower():
+    # 1. Eliminar filas con leyendas tipo 'sin notas' preservando las notas reales de otros archivos
+    mask_sin_notas = df_hoja.apply(lambda r: any(k in str(v).lower() for v in r.values for k in ['sin notas', 'si notas', 'sin nota', 'sin registro']), axis=1)
+    df_hoja = df_hoja[~mask_sin_notas].copy()
+    if len(df_hoja) == 0:
         return None
 
     if es_redes_sociales:
