@@ -40,28 +40,26 @@ genai.configure(api_key=GEMINI_API_KEY)
 # BASE DE CONOCIMIENTO Y CRITERIOS UNIVERSALES DE CLASIFICACIÓN POLÍTICA
 # ==============================================================================
 SYSTEM_PROMPT_UNIVERSAL = """
-Eres un analista senior de inteligencia política, comunicación gubernamental y monitoreo de medios.
-Tu objetivo es clasificar publicaciones para CUALQUIER actor político (presidente municipal, gobernador, legislador, secretario de estado, dirigente partidista o candidato).
+Eres un analista senior de inteligencia política, control de daños y comunicación estratégica.
+Tu tarea es evaluar publicaciones de REDES SOCIALES y MEDIOS DE COMUNICACIÓN desde la perspectiva DIRECTA del actor político objetivo (o su equipo de comunicación).
 
-Determina el impacto reputacional del texto para el actor político objetivo en una de dos categorías: 'POSITIVA' o 'NEGATIVA'.
+Ponte en el lugar del actor político al leer cada nota o mención ciudadana para determinar su impacto reputacional en una de dos categorías: 'POSITIVA' o 'NEGATIVA'.
 
-============================================================
-REGLAS UNIVERSALES DE CLASIFICACIÓN:
-============================================================
+==============================================================================
+CRITERIOS DE CLASIFICACIÓN (DESDE LA PERSPECTIVA DEL ACTOR POLÍTICO):
+==============================================================================
 
-1. DEBES CLASIFICAR COMO 'POSITIVA' (O INFORMATIVA FAVORABLE):
-   - LOGROS DE GESTIÓN Y CIFRAS A FAVOR: Informes de actividades, rendición de cuentas, inauguraciones de obras públicas, infraestructura, pavimentaciones, alumbrado, equipamiento y reportes de DISMINUCIÓN o BAJA en índices delictivos o rezago social.
-   - BIENESTAR Y PROGRAMAS SOCIALES: Entrega de apoyos directos, becas, despensas, kits escolares, jornadas de salud, vacunación, atención a grupos vulnerables y ferias del empleo.
-   - AGENDA INSTITUCIONAL Y RELACIONES PÚBLICAS: Convenios de colaboración, acuerdos con sindicatos o sectores empresariales, reuniones de trabajo, comparecencias, iniciativas legislativas aprobadas o presentadas, foros, eventos culturales y festividades tradicionales.
-   - COBERTURA INFORMATIVA NEUTRAL: Notas descriptivas de medios de comunicación sobre las actividades, posicionamientos o giras de trabajo del actor.
-   - POSICIONAMIENTO POLÍTICO: Resultados favorables o neutrales en encuestas de opinión pública, aprobación ciudadana o respaldos políticos.
+1. CLASIFICA COMO 'NEGATIVA' (Si el actor político identifica):
+   - CRÍTICA A SU PERSONA O PERFIL: Señalamientos de corrupción, prepotencia, privilegios, nepotismo, incapacidad, descalificaciones de su origen político, cuestionamientos a su legitimidad o ataques de adversarios y 'fuego amigo'.
+   - CRÍTICA A SU TRABAJO O ADMINISTRACIÓN: Cuestionamientos a sus decisiones de gobierno, obras deficientes o inconclusas, retrasos en proyectos, opacidad presupuestal, gasto excesivo en encuestas/publicidad o señalamientos de auditorías y fiscalización.
+   - RECLAMO SOCIAL Y QUEJAS CIUDADANAS: Ciudadanos o colectivos exigiendo atención o denunciando fallas en servicios públicos (baches, luminarias apagadas, basura acumulada, falta de agua potable, fugas, drenaje, parques en abandono).
+   - INSEGURIDAD Y PROTESTAS: Reportes de asaltos, homicidios, robos a transeúntes, transporte público o comercios ocurridos en su territorio, así como bloqueos viales, paros, marchas y manifestaciones en su contra.
 
-2. DEBES CLASIFICAR COMO 'NEGATIVA' (CRISIS O AFECTACIÓN REPUTACIONAL):
-   - INSEGURIDAD Y HECHOS DELICTIVOS: Cobertura de asaltos, homicidios, robos de vehículos, autopartes, balaceras o delitos ocurridos en su territorio/área de responsabilidad atribuibles a falta de vigilancia.
-   - PROTESTAS Y RECLAMOS CIUDADANOS: Manifestaciones, paros, bloqueos viales, quejas ciudadanas por deficiencia de servicios públicos (baches, basura, agua potable, drenaje, alumbrado) o señalamientos de abandono gubernamental.
-   - CORRUPCIÓN, AUDITORÍAS Y FISCALIZACIÓN: Observaciones de órganos de control o auditorías superiores por presunto daño patrimonial, desvío de recursos, enriquecimiento ilícito, nepotismo o falta de transparencia.
-   - CONDUCTA INDEBIDA Y ESCÁNDALOS: Funcionarios involucrados en detenciones, incidentes viales, prepotencia, abuso de poder, uso indebido de recursos públicos o tráfico de influencias ('charolazos').
-   - CRÍTICA POLÍTICA DIRECTA: Señalamientos de adversarios políticos, acusaciones de coacción/acarreo a eventos, 'fuego amigo', divisiones internas o columnas de opinión que descalifiquen su desempeño, origen o legitimidad.
+2. CLASIFICA COMO 'POSITIVA' / INFORMATIVA (Si el actor político identifica):
+   - COBERTURA DE SUS EVENTOS Y GESTIÓN: Notas y menciones sobre arranques o inauguraciones de obras públicas, pavimentaciones, entrega de apoyos sociales, despensas, becas, programas comunitarios, jornadas de salud, vacunación y ferias del empleo.
+   - DECLARACIONES Y POSTURA PROPIA: Medios y ciudadanos replicando sus declaraciones, ruedas de prensa, entrevistas, puntos de vista, comunicados oficiales o iniciativas legislativas presentadas y aprobadas.
+   - AGENDA PÚBLICA Y SERVICIOS: Publicaciones informativas sobre eventos cívicos, actividades culturales, festividades tradicionales, cursos, talleres, trámites municipales/estatales y convocatorias ciudadanas.
+   - RESPALDOS POLÍTICOS Y RECONOCIMIENTO: Felicitaciones de liderazgos sociales o políticos, respaldos comunitarios y notas sobre encuestas de opinión pública con posicionamiento favorable.
 """
 
 model_clasificador = genai.GenerativeModel(
@@ -348,7 +346,7 @@ def reparar_desfase_columnas_excel(df):
 def clasificar_lote_con_ia(lista_notas, actor_nombre):
     prompt = f"""
 Clasifica las siguientes publicaciones respecto al actor político: "{actor_nombre}".
-Aplica estrictamente las reglas universales de clasificación política del sistema.
+Aplica estrictamente los criterios de evaluación desde la perspectiva directa del actor político.
 
 NOTAS A EVALUAR:
 {json.dumps(lista_notas, ensure_ascii=False)}
@@ -382,7 +380,7 @@ Responde ÚNICAMENTE un JSON válido con este formato exacto:
             if not es_logro_disminucion and not es_acuerdo_laboral and any(k in t for k in [
                 "asalto", "asesinato", "homicidio", "robo de ", "cristalazo", "daño patrimonial", "desvío de recursos",
                 "auditoría", "nepotismo", "desfalco", "desplante", "se manifestaron", "protestan", "exigen",
-                "ebrio", "borracho", "charolazo", "prepotencia", "prepotente", "bloqueo", "baches", "acarreados"
+                "ebrio", "borracho", "charolazo", "prepotencia", "prepotente", "bloqueo", "baches", "bache", "sin agua", "acarreados"
             ]):
                 res_map[item["id"]] = "NEGATIVA"
             else:
@@ -400,25 +398,26 @@ def determinar_sentimiento_df(df_data, actor_nombre_target, es_tradicionales):
             sent_series = df_data[sent_col_name].fillna("").astype(str).str.lower()
             return sent_series.apply(lambda s: "NEGATIVA" if any(k in s for k in ["negat", "critica", "contra"]) else "POSITIVA").tolist()
 
-    sentimientos_finales = ["POSITIVA"] * len(df_data)
+    # Evaluación de Redes Sociales con perspectiva de IA del actor político
+    df_eval = df_data.reset_index(drop=True)
+    sentimientos_finales = ["POSITIVA"] * len(df_eval)
     lote_tamano = 15
-    indices = df_data.index.tolist()
+    total_lotes = (len(df_eval) + lote_tamano - 1) // lote_tamano
     
     progreso = st.progress(0)
-    total_lotes = (len(indices) + lote_tamano - 1) // lote_tamano
 
     for l_idx in range(total_lotes):
-        sub_indices = indices[l_idx * lote_tamano : (l_idx + 1) * lote_tamano]
+        sub_df = df_eval.iloc[l_idx * lote_tamano : (l_idx + 1) * lote_tamano]
         lista_lote = []
-        for local_id, idx in enumerate(sub_indices):
-            row = df_data.loc[idx]
+        for local_id, (_, row) in enumerate(sub_df.iterrows()):
             texto = obtener_campo(row, ["Contenido", "Detail", "Titulo", "Título", "Summary", "Síntesis", "Sintesis", "Title", "Encabezado", "Tema", "Nota"])
             lista_lote.append({"id": local_id, "texto": texto})
             
         res_map = clasificar_lote_con_ia(lista_lote, actor_nombre_target)
-        for local_id, idx in enumerate(sub_indices):
-            real_pos = df_data.index.get_loc(idx)
-            sentimientos_finales[real_pos] = res_map.get(local_id, "POSITIVA")
+        for local_id in range(len(sub_df)):
+            real_idx = l_idx * lote_tamano + local_id
+            if real_idx < len(sentimientos_finales):
+                sentimientos_finales[real_idx] = res_map.get(local_id, "POSITIVA")
             
         progreso.progress((l_idx + 1) / total_lotes)
         
@@ -901,7 +900,7 @@ if tipo_analisis == "Redes Sociales":
 
     if uploaded_file and actor_nombre_in:
         if st.button("Generar Reporte Oficial", type="primary"):
-            with st.spinner("Limpiando cuentas oficiales y procesando todas las notas con IA universal..."):
+            with st.spinner("Limpiando cuentas oficiales y evaluando sentimiento con IA desde la perspectiva del actor..."):
                 try:
                     dict_h = cargar_archivo_seguro(uploaded_file)
                     df_redes = list(dict_h.values())[0]
