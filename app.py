@@ -40,26 +40,29 @@ genai.configure(api_key=GEMINI_API_KEY)
 # BASE DE CONOCIMIENTO Y CRITERIOS UNIVERSALES DE CLASIFICACIÓN POLÍTICA
 # ==============================================================================
 SYSTEM_PROMPT_UNIVERSAL = """
-Eres un analista senior de inteligencia política, control de daños y comunicación estratégica.
-Tu tarea es evaluar publicaciones de REDES SOCIALES y MEDIOS DE COMUNICACIÓN desde la perspectiva DIRECTA del actor político objetivo (o su equipo de comunicación).
+Eres un analista senior de inteligencia política, comunicación gubernamental y control de crisis.
+Tu objetivo es clasificar publicaciones para CUALQUIER actor político objetivo evaluando el texto desde la perspectiva DIRECTA del actor político y su equipo de control de daños.
 
-Ponte en el lugar del actor político al leer cada nota o mención ciudadana para determinar su impacto reputacional en una de dos categorías: 'POSITIVA' o 'NEGATIVA'.
+Determina el impacto reputacional del texto para el actor político en una de dos categorías: 'POSITIVA' o 'NEGATIVA'.
 
 ==============================================================================
-CRITERIOS DE CLASIFICACIÓN (DESDE LA PERSPECTIVA DEL ACTOR POLÍTICO):
+REGLAS Y CRITERIOS DE CLASIFICACIÓN (PERSPECTIVA DEL ACTOR POLÍTICO):
 ==============================================================================
 
-1. CLASIFICA COMO 'NEGATIVA' (Si el actor político identifica):
-   - CRÍTICA A SU PERSONA O PERFIL: Señalamientos de corrupción, prepotencia, privilegios, nepotismo, incapacidad, descalificaciones de su origen político, cuestionamientos a su legitimidad o ataques de adversarios y 'fuego amigo'.
-   - CRÍTICA A SU TRABAJO O ADMINISTRACIÓN: Cuestionamientos a sus decisiones de gobierno, obras deficientes o inconclusas, retrasos en proyectos, opacidad presupuestal, gasto excesivo en encuestas/publicidad o señalamientos de auditorías y fiscalización.
-   - RECLAMO SOCIAL Y QUEJAS CIUDADANAS: Ciudadanos o colectivos exigiendo atención o denunciando fallas en servicios públicos (baches, luminarias apagadas, basura acumulada, falta de agua potable, fugas, drenaje, parques en abandono).
-   - INSEGURIDAD Y PROTESTAS: Reportes de asaltos, homicidios, robos a transeúntes, transporte público o comercios ocurridos en su territorio, así como bloqueos viales, paros, marchas y manifestaciones en su contra.
+1. CLASIFICA ESTRICTAMENTE COMO 'NEGATIVA' (Cualquier crisis, crítica, queja o afectación):
+   - ESCÁNDALOS POLICIALES Y ABUSO DE FUERZA: Elementos de policía o tránsito disparando, encañonando, extorsionando, agrediendo automovilistas, cobro de cuotas, prepotencia, o calificados como 'asesinos', 'delincuentes' o 'as3sinos'.
+   - INVESTIGACIONES, AUDITORÍAS Y ÓRDENES JUDICIALES: Órdenes de aprehensión, denuncias penales, observaciones de la Auditoría Superior (ASE/ASF), dinero o recursos no comprobados/no justificados, daño patrimonial o desvíos contra el actor, su pareja o funcionarios.
+   - CRÍTICA POLÍTICA, VIDEOS Y COLUMNAS DE OPINIÓN: Expresiones editoriales de advertencia o golpeteo político como "se viene la noche", "bajo la lupa", "pone en jaque", "en el ojo del huracán", "focos rojos", "alerta", "sinvergüenza", "fichita" o acusaciones de traición.
+   - ACUSACIONES DE OPACIDAD Y FALTA DE TRANSPARENCIA: Críticas de adversarios, regidores u organizaciones que señalen falta de claridad en el manejo de recursos, licitaciones o contratos.
+   - DELINCUENCIA E INSEGURIDAD EN SU TERRITORIO: Notas sobre robos (bicicletas, casas, comercios, autopartes), asaltos al transporte, homicidios o balaceras en su municipio, especialmente si se destaca la falta de vigilancia o cercanía a oficinas gubernamentales.
+   - RECLAMOS CIUDADANOS Y SERVICIOS DEFICIENTES: Quejas por baches, falta de agua, luminarias descompuestas, basura o abandono en colonias y juntas auxiliares.
+   - HASHTAGS DE ATAQUE O LENGUAJE EVASIVO: Publicaciones con etiquetas como #peligro, #corrupcion, #balazos, #as3sinos, #orden, #aprehension, #escandalo, #rateros.
 
-2. CLASIFICA COMO 'POSITIVA' / INFORMATIVA (Si el actor político identifica):
-   - COBERTURA DE SUS EVENTOS Y GESTIÓN: Notas y menciones sobre arranques o inauguraciones de obras públicas, pavimentaciones, entrega de apoyos sociales, despensas, becas, programas comunitarios, jornadas de salud, vacunación y ferias del empleo.
-   - DECLARACIONES Y POSTURA PROPIA: Medios y ciudadanos replicando sus declaraciones, ruedas de prensa, entrevistas, puntos de vista, comunicados oficiales o iniciativas legislativas presentadas y aprobadas.
-   - AGENDA PÚBLICA Y SERVICIOS: Publicaciones informativas sobre eventos cívicos, actividades culturales, festividades tradicionales, cursos, talleres, trámites municipales/estatales y convocatorias ciudadanas.
-   - RESPALDOS POLÍTICOS Y RECONOCIMIENTO: Felicitaciones de liderazgos sociales o políticos, respaldos comunitarios y notas sobre encuestas de opinión pública con posicionamiento favorable.
+2. CLASIFICA COMO 'POSITIVA' / INFORMATIVA (Beneficio, Cobertura o Agenda):
+   - OBRAS PÚBLICAS Y EVENTOS INSTITUCIONALES: Arranques de obra, pavimentación, alumbrado, cursos de verano, eventos culturales, ventanilla digital, apoyos sociales, despensas y ferias del empleo.
+   - DECLARACIONES Y POSTURA OFICIAL: Difusión de sus discursos, entrevistas, réplicas, comunicados de prensa o iniciativas legislativas.
+   - AGENDA PÚBLICA Y SERVICIOS: Convocatorias, actividades cívicas, trámites y servicios institucionales.
+   - RESPALDOS POLÍTICOS Y ENCUESTAS: Felicitaciones, cierres de filas partidistas o posicionamientos favorables en sondeos.
 """
 
 model_clasificador = genai.GenerativeModel(
@@ -346,7 +349,7 @@ def reparar_desfase_columnas_excel(df):
 def clasificar_lote_con_ia(lista_notas, actor_nombre):
     prompt = f"""
 Clasifica las siguientes publicaciones respecto al actor político: "{actor_nombre}".
-Aplica estrictamente los criterios de evaluación desde la perspectiva directa del actor político.
+Aplica estrictamente los criterios de evaluación desde la perspectiva directa del actor político y control de daños.
 
 NOTAS A EVALUAR:
 {json.dumps(lista_notas, ensure_ascii=False)}
@@ -372,19 +375,18 @@ Responde ÚNICAMENTE un JSON válido con este formato exacto:
         return res_map
     except Exception:
         res_map = {}
+        patrones_negativos_regex = [
+            r'as3sin[oa]s?', r'asesin[oa]s?', r'orden(es)? de aprehensi[oó]n', r'no justificad[oa]s?', r'se viene la noche',
+            r'extorsi[oó]n', r'extorsiona', r'disparan?do?', r'encañonan?', r'balaz[o0]s?', r'arma de fuego',
+            r'cortando cartucho', r'vidrio roto', r'agresi[oó]n armada', r'polic[ií]as corrupt[oa]s?', r'prepoten(te|cia)',
+            r'inseguridad golpea', r'roban? ', r'robo a ', r'bajo la lupa', r'opacidad', r'en jaque', r'esc[aá]ndalo',
+            r'daño patrimonial', r'desv[ií]o', r'auditor[ií]a', r'nepotismo', r'desfalco', r'sinverg[uü]enza', r'fichita',
+            r'baches?', r'falta de agua', r'sin agua', r'luz apagada', r'luminarias? descompuesta', r'basura acumulada'
+        ]
         for item in lista_notas:
             t = str(item.get("texto", "")).lower()
-            es_logro_disminucion = any(k in t for k in ["disminuye", "disminución", "bajan", "reduccion", "cae", "a la baja"]) and any(k in t for k in ["delito", "robo", "incidencia", "homicidio"])
-            es_acuerdo_laboral = any(k in t for k in ["sindicato", "convenio", "acuerdo laboral", "prestaciones", "condiciones de trabajo"])
-            
-            if not es_logro_disminucion and not es_acuerdo_laboral and any(k in t for k in [
-                "asalto", "asesinato", "homicidio", "robo de ", "cristalazo", "daño patrimonial", "desvío de recursos",
-                "auditoría", "nepotismo", "desfalco", "desplante", "se manifestaron", "protestan", "exigen",
-                "ebrio", "borracho", "charolazo", "prepotencia", "prepotente", "bloqueo", "baches", "bache", "sin agua", "acarreados"
-            ]):
-                res_map[item["id"]] = "NEGATIVA"
-            else:
-                res_map[item["id"]] = "POSITIVA"
+            es_neg = any(re.search(p, t) for p in patrones_negativos_regex)
+            res_map[item["id"]] = "NEGATIVA" if es_neg else "POSITIVA"
         return res_map
 
 def determinar_sentimiento_df(df_data, actor_nombre_target, es_tradicionales):
@@ -396,7 +398,20 @@ def determinar_sentimiento_df(df_data, actor_nombre_target, es_tradicionales):
                 break
         if sent_col_name:
             sent_series = df_data[sent_col_name].fillna("").astype(str).str.lower()
-            return sent_series.apply(lambda s: "NEGATIVA" if any(k in s for k in ["negat", "critica", "contra"]) else "POSITIVA").tolist()
+            # Auditoría inteligente: si el texto tiene crisis evidente, marcar como NEGATIVA
+            sentimientos_lista = []
+            patrones_crisis_forzada = [
+                r'as3sin[oa]s?', r'orden(es)? de aprehensi[oó]n', r'no justificad[oa]s?', r'se viene la noche',
+                r'extorsi[oó]n', r'disparan?do?', r'encañonan?', r'agresi[oó]n armada', r'inseguridad golpea'
+            ]
+            for _, row in df_data.iterrows():
+                texto_row = str(obtener_campo(row, ["Contenido", "Detail", "Titulo", "Título", "Summary", "Síntesis", "Nota"])).lower()
+                sent_raw = str(row[sent_col_name]).lower() if sent_col_name in row.index else ""
+                if any(re.search(p, texto_row) for p in patrones_crisis_forzada) or any(k in sent_raw for k in ["negat", "critica", "contra"]):
+                    sentimientos_lista.append("NEGATIVA")
+                else:
+                    sentimientos_lista.append("POSITIVA")
+            return sentimientos_lista
 
     # Evaluación de Redes Sociales con perspectiva de IA del actor político
     df_eval = df_data.reset_index(drop=True)
@@ -935,7 +950,6 @@ else:
                     if df_h is None or df_h.empty:
                         continue
                     
-                    # Identificar nombre de candidato
                     if 'Menu' in df_h.columns and len(df_h['Menu'].dropna()) > 0:
                         nombre_raw = str(df_h['Menu'].dropna().iloc[0]).strip()
                     else:
