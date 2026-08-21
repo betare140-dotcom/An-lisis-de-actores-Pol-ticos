@@ -28,8 +28,8 @@ st.set_page_config(
 
 st.title("📊 Generador de Monitoreo de Actores Políticos")
 st.write(
-    "Sistema universal de monitoreo político multi-archivo para cualquier perfil o cargo público. "
-    "Permite cargar simultáneamente archivos de Radio/TV, Portales Web y Redes Sociales para generar un solo reporte oficial consolidado por candidato."
+    "Sistema universal de monitoreo político para cualquier perfil o cargo público. "
+    "Permite procesar archivos individuales o fusionar múltiples archivos (Radio/TV, Portales Web y Redes) en un solo reporte oficial consolidado."
 )
 
 # API Key Pre-integrada
@@ -513,20 +513,41 @@ NOTICIAS NEGATIVAS DISPONIBLES ({len(neg_textos)} notas):
     return "\n".join(lineas_res)
 
 def obtener_link_inteligente(row):
-    # 1. Prioridad para Portales / Web / Redes: Link directo del medio si existe
-    link_url_medio = obtener_campo(row, ["Link URL Medio", "URL Medio", "Link Medio", "URL"])
-    if link_url_medio and str(link_url_medio).startswith("http") and "hanakua.mx/Testigo" not in str(link_url_medio):
-        return str(link_url_medio).strip()
+    urls_en_fila = []
+    
+    # 1. Buscar en campos específicos de enlace
+    campos_prioridad = ["Link URL Medio", "Link de Nota", "URL", "Enlace", "Link", "Link Medio", "Alcance"]
+    for c in campos_prioridad:
+        val = obtener_campo(row, [c])
+        if val and str(val).startswith("http") and str(val).strip() not in urls_en_fila:
+            urls_en_fila.append(str(val).strip())
+            
+    # 2. Buscar en todas las celdas de la fila por si hubo desplazamiento humano en Excel
+    for val in row.values:
+        if val is not None and not pd.isna(val):
+            s_val = str(val).strip()
+            if s_val.startswith("http") and s_val not in urls_en_fila:
+                urls_en_fila.append(s_val)
+                
+    if not urls_en_fila:
+        return ""
         
-    # 2. Prioridad para Radio / TV: Link de la nota en Hanakua ([https://next.hanakua.mx/Notas?id=](https://next.hanakua.mx/Notas?id=)...)
-    link_de_nota = obtener_campo(row, ["Link de Nota", "Link Nota", "URL Nota"])
-    if link_de_nota and str(link_de_nota).startswith("http") and "hanakua.mx/Testigo" not in str(link_de_nota):
-        return str(link_de_nota).strip()
+    # Filtrar descartando siempre enlaces de Testigo
+    urls_sin_testigo = [u for u in urls_en_fila if "hanakua.mx/Testigo" not in u]
+    
+    # Regla A: Si hay una URL externa del medio (Portal Web, Prensa o Red Social), tiene prioridad máxima
+    urls_medios_externos = [u for u in urls_sin_testigo if "hanakua.mx" not in u.lower()]
+    if urls_medios_externos:
+        return urls_medios_externos[0]
         
-    # 3. Respaldo general (excluyendo siempre Testigo)
-    link_generico = obtener_campo(row, ["Enlace", "Link"])
-    if link_generico and str(link_generico).startswith("http") and "hanakua.mx/Testigo" not in str(link_generico):
-        return str(link_generico).strip()
+    # Regla B: Si es Radio / TV (no hay web externa), usar el link de la nota en Hanakua ([https://next.hanakua.mx/Notas?id=](https://next.hanakua.mx/Notas?id=)...)
+    urls_hanakua_notas = [u for u in urls_sin_testigo if "hanakua.mx/Notas" in u]
+    if urls_hanakua_notas:
+        return urls_hanakua_notas[0]
+        
+    # Respaldo
+    if urls_sin_testigo:
+        return urls_sin_testigo[0]
         
     return ""
 
@@ -915,6 +936,7 @@ else:
                     if df_h is None or df_h.empty:
                         continue
                     
+                    # Identificar nombre de candidato
                     if 'Menu' in df_h.columns and len(df_h['Menu'].dropna()) > 0:
                         nombre_raw = str(df_h['Menu'].dropna().iloc[0]).strip()
                     else:
