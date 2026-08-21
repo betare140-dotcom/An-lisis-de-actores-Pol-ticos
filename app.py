@@ -398,7 +398,6 @@ def determinar_sentimiento_df(df_data, actor_nombre_target, es_tradicionales):
                 break
         if sent_col_name:
             sent_series = df_data[sent_col_name].fillna("").astype(str).str.lower()
-            # Auditoría inteligente: si el texto tiene crisis evidente, marcar como NEGATIVA
             sentimientos_lista = []
             patrones_crisis_forzada = [
                 r'as3sin[oa]s?', r'orden(es)? de aprehensi[oó]n', r'no justificad[oa]s?', r'se viene la noche',
@@ -440,6 +439,18 @@ def determinar_sentimiento_df(df_data, actor_nombre_target, es_tradicionales):
     return sentimientos_finales
 
 # --- GENERADOR UNIVERSAL DEL RESUMEN EJECUTIVO EN PÁRRAFOS CONCISOS ---
+def limpiar_texto_para_resumen(texto):
+    if not isinstance(texto, str) or texto == "nan":
+        return ""
+    t = re.sub(r'https?://\S+', '', texto)
+    t = re.sub(r'---\s*transcripci[oó]n\s*---[\s\S]*', '', t, flags=re.I)
+    t = re.sub(r'kind:\s*captions.*', '', t, flags=re.I)
+    t = re.sub(r'#([a-zA-Z0-9_]+)', r'\1', t)
+    t = re.sub(r'[\U00010000-\U0010ffff]', '', t)
+    t = re.sub(r':[a-zA-Z0-9_\-|]+:', '', t)
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
+
 def extraer_resumen_temas_real(df_data, actor_nombre):
     pos_df = df_data[df_data["sentimiento_final"].isin(["POSITIVA", "NEUTRA"])]
     neg_df = df_data[df_data["sentimiento_final"] == "NEGATIVA"]
@@ -450,7 +461,8 @@ def extraer_resumen_temas_real(df_data, actor_nombre):
     for col in columnas_posibles_texto:
         if col in pos_df.columns or any(quitar_acentos(str(c)) == quitar_acentos(col) for c in pos_df.columns):
             serie_t = obtener_columna_serie(pos_df, [col])
-            pos_textos = [t for t in serie_t.dropna().astype(str).tolist() if "teaser" not in t.lower() and len(t.strip()) > 10]
+            raw_list = serie_t.dropna().astype(str).tolist()
+            pos_textos = [limpiar_texto_para_resumen(t) for t in raw_list if len(limpiar_texto_para_resumen(t)) > 10 and "teaser" not in t.lower()]
             if len(pos_textos) > 0:
                 break
 
@@ -458,69 +470,85 @@ def extraer_resumen_temas_real(df_data, actor_nombre):
     for col in columnas_posibles_texto:
         if col in neg_df.columns or any(quitar_acentos(str(c)) == quitar_acentos(col) for c in neg_df.columns):
             serie_t = obtener_columna_serie(neg_df, [col])
-            neg_textos = [t for t in serie_t.dropna().astype(str).tolist() if "teaser" not in t.lower() and len(t.strip()) > 10]
+            raw_list = serie_t.dropna().astype(str).tolist()
+            neg_textos = [limpiar_texto_para_resumen(t) for t in raw_list if len(limpiar_texto_para_resumen(t)) > 10 and "teaser" not in t.lower()]
             if len(neg_textos) > 0:
                 break
+
+    # Deduplicar textos base
+    pos_unicos = list(dict.fromkeys(pos_textos))
+    neg_unicos = list(dict.fromkeys(neg_textos))
 
     prompt = f"""
 Eres un analista senior de comunicación política y redacción ejecutiva.
 Redacta el "RESUMEN" ejecutivo oficial para el actor político: "{actor_nombre}".
 
-REGLAS DE FORMATO (OBLIGATORIAS):
-1. Cada punto DEBE ser exactamente de 1 solo párrafo fluido (de 2 a 3 líneas).
-2. Estructura exacta de cada viñeta:
-   [Número]. [Título del Eje Temático Específico en Mayúsculas y Minúsculas]: [Síntesis ejecutiva explicando los hechos con nombres de programas, lugares, obras o instituciones mencionados en las notas].
-3. Prohibido copiar o pegar párrafos completos de las noticias originales. Debes resumir y redactar con estilo formal e institucional.
-4. Genera de 1 a 3 puntos en 'Temas relevantes informativos' y de 1 a 3 puntos en 'Temas negativos'.
-5. Si no hay notas negativas ({len(neg_textos)} negativas registradas), escribe obligatoriamente:
-   1. No se registraron temas negativos en el periodo analizado.
+REGLAS DE FORMATO Y ESTILO (OBLIGATORIAS):
+1. CERO DUPLICADOS: Agrupa las notas por tema. Si varias notas tratan del mismo hecho (ej. un incidente vial con policías, una columna de opinión, un robo o una obra pública), redacta UN SOLO punto que sintetice el caso globalmente.
+2. REDACCIÓN DESCRIPTIVA EJECUTIVA: Cada punto debe ser un párrafo fluido, profesional y descriptivo (de 2 a 3 líneas), explicando los hechos con nombres de programas, lugares, vialidades o instituciones.
+3. PROHIBIDO COPIAR Y PEGAR TITULARES O FRAGMENTOS LITERALES: Debes sintetizar y redactar con tus propias palabras en tono institucional y formal (igual que en los temas positivos).
+4. ESTRUCTURA EXACTA DE CADA PUNTO:
+   [Número]. [Título del Eje Temático en Mayúsculas y Minúsculas]: [Descripción ejecutiva redactada formalmente].
+5. CANTIDAD DE PUNTOS:
+   - Genera de 1 a 3 ejes temáticos en 'Temas relevantes informativos'.
+   - Genera de 1 a 3 ejes temáticos en 'Temas negativos'.
+   - Si no hay notas negativas ({len(neg_unicos)} negativas registradas), escribe obligatoriamente:
+     1. No se registraron temas negativos en el periodo analizado.
 
 EJEMPLO DE ESTRUCTURA:
 Temas relevantes informativos
-1. [Eje Temático Positivo 1]: [Síntesis ejecutiva de 2 a 3 líneas de los hechos].
-2. [Eje Temático Positivo 2]: [Síntesis ejecutiva de 2 a 3 líneas de los hechos].
+1. Promoción del Desarrollo Económico: La administración presentó la Ventanilla Digital de Inversiones ante el Consejo Directivo de CANACINTRA Puebla para agilizar trámites y atraer nuevas empresas.
+2. Actividades Culturales y Recreativas: Se llevó a cabo la clausura del Curso de Verano 2026 en la Casa de Cultura Tlanezcalli, enfocado en el desarrollo artístico de niñas, niños y jóvenes.
 
 Temas negativos
-1. [Eje Temático Negativo 1 o Leyenda si no hay]: [Síntesis ejecutiva de 2 a 3 líneas de las controversias].
+1. Incidentes de Seguridad Vial: Cobertura mediática y reclamos ciudadanos tras el presunto intento de extorsión y agresión atribuido a policías municipales contra una pareja en el Bulevar del Niño Poblano.
+2. Controversias y Crítica Política: Publicación de videocolumnas de opinión y señalamientos sobre investigaciones administrativas y observaciones de recursos públicos.
 
-NOTICIAS POSITIVAS DISPONIBLES ({len(pos_textos)} notas):
-{str(pos_textos[:30])}
+NOTAS POSITIVAS DISPONIBLES:
+{json.dumps(pos_unicos[:25], ensure_ascii=False)}
 
-NOTICIAS NEGATIVAS DISPONIBLES ({len(neg_textos)} notas):
-{str(neg_textos[:25])}
+NOTAS NEGATIVAS DISPONIBLES:
+{json.dumps(neg_unicos[:25], ensure_ascii=False)}
 """
     try:
-        res_ia = model_redactor.generate_content(prompt).text.strip()
-        if len(neg_textos) > 0 and "no se registraron temas negativos" in res_ia.lower():
+        response = model_redactor.generate_content(prompt)
+        res_ia = response.text.strip()
+        if len(neg_unicos) > 0 and "no se registraron temas negativos" in res_ia.lower():
             pass
-        elif res_ia and len(res_ia) > 30 and len(res_ia) < 1500:
+        elif res_ia and len(res_ia) > 30 and len(res_ia) < 1800:
             if not res_ia.startswith("Temas relevantes informativos"):
                 res_ia = "Temas relevantes informativos\n" + res_ia
             return res_ia
     except Exception:
         pass
 
+    # Fallback inteligente y descriptivo sin duplicados
     lineas_res = ["Temas relevantes informativos"]
-    if len(pos_textos) > 0:
-        titulos_unicos_pos = list(dict.fromkeys([
-            re.sub(r'^\d+:\d+\s*(hrs|am|pm|\.)\s*', '', t, flags=re.I).strip() 
-            for t in pos_textos if t.strip() and "teaser" not in t.lower()
-        ]))
-        for i, t in enumerate(titulos_unicos_pos[:3], 1):
+    if len(pos_unicos) > 0:
+        for i, t in enumerate(pos_unicos[:3], 1):
             t_clean = t.split('.')[0].strip()
-            lineas_res.append(f"{i}. Gestión y Agenda Institucional: Difusión y seguimiento a {t_clean.lower()}.")
+            lineas_res.append(f"{i}. Gestión y Agenda Institucional: Seguimiento y difusión a {t_clean.lower()}.")
     else:
         lineas_res.append("1. Agenda Institucional: Difusión de actividades públicas y agenda de trabajo.")
 
     lineas_res.append("\nTemas negativos")
-    if len(neg_textos) > 0:
-        titulos_unicos_neg = list(dict.fromkeys([
-            re.sub(r'^\d+:\d+\s*(hrs|am|pm|\.)\s*', '', t, flags=re.I).strip() 
-            for t in neg_textos if t.strip() and "teaser" not in t.lower()
-        ]))
-        for i, t in enumerate(titulos_unicos_neg[:3], 1):
-            t_clean = t.split('.')[0].strip()
-            lineas_res.append(f"{i}. Controversias y Señalamientos Públicos: Cobertura mediática sobre {t_clean.lower()}.")
+    if len(neg_unicos) > 0:
+        ejes_neg_detectados = []
+        t_todo = " ".join(neg_unicos).lower()
+        if any(k in t_todo for k in ["policía", "policia", "tránsito", "disparando", "extorsión", "niño poblano", "as3sinos"]):
+            ejes_neg_detectados.append("Incidentes de Seguridad y Actuación Policial: Cobertura mediática y quejas ciudadanas sobre presuntos abusos, agresiones y revisiones a automovilistas por parte de elementos de seguridad vial.")
+        if any(k in t_todo for k in ["columna", "contrastes", "aprehensión", "no justificados", "se viene la noche", "opacidad", "transparencia"]):
+            ejes_neg_detectados.append("Crítica Política y Fiscalización: Publicación de columnas editoriales y señalamientos respecto a investigaciones administrativas, transparencia y manejo de recursos públicos.")
+        if any(k in t_todo for k in ["robo", "asalt", "bicicleta", "inseguridad golpea"]):
+            ejes_neg_detectados.append("Demandas Ciudadanas de Seguridad: Denuncias vecinales sobre hechos delictivos y robo en zonas céntricas, exigiendo mayor patrullaje y prevención del delito.")
+            
+        if not ejes_neg_detectados:
+            for t in neg_unicos[:2]:
+                t_clean = t.split('.')[0].strip()
+                ejes_neg_detectados.append(f"Controversias y Señalamientos Públicos: Cobertura sobre {t_clean.lower()}.")
+                
+        for i, eje_txt in enumerate(ejes_neg_detectados[:3], 1):
+            lineas_res.append(f"{i}. {eje_txt}")
     else:
         lineas_res.append("1. No se registraron temas negativos en el periodo analizado.")
 
@@ -900,7 +928,7 @@ tipo_analisis = st.radio(
         "Redes Sociales",
         "Medios Tradicionales / Portales / TV y Radio (Multi-Archivo)"
     ],
-    index=1
+    index=0
 )
 
 if tipo_analisis == "Redes Sociales":
@@ -950,6 +978,7 @@ else:
                     if df_h is None or df_h.empty:
                         continue
                     
+                    # Identificar nombre de candidato
                     if 'Menu' in df_h.columns and len(df_h['Menu'].dropna()) > 0:
                         nombre_raw = str(df_h['Menu'].dropna().iloc[0]).strip()
                     else:
