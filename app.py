@@ -28,8 +28,8 @@ st.set_page_config(
 
 st.title("📊 Generador de Monitoreo de Actores Políticos")
 st.write(
-    "Sistema universal de monitoreo político para cualquier perfil o cargo público. "
-    "Genera reportes oficiales en Word con clasificación de IA, filtrado automático y síntesis ejecutiva."
+    "Sistema universal de monitoreo político multi-archivo para cualquier perfil o cargo público. "
+    "Permite cargar simultáneamente archivos de Radio/TV, Portales Web y Redes Sociales para generar un solo reporte unificado por candidato."
 )
 
 # API Key Pre-integrada
@@ -83,6 +83,38 @@ def quitar_acentos(texto):
 def normalizar_cadena(texto):
     t = quitar_acentos(texto)
     return re.sub(r'[^a-z0-9]', '', t)
+
+def normalizar_nombre_candidato(nombre):
+    t = quitar_acentos(str(nombre).strip())
+    t_clean = re.sub(r'[^a-z0-9]', '', t)
+    
+    alias_map = {
+        "pepechedraui": "JOSÉ CHEDRAUI BUDIB",
+        "josechedraui": "JOSÉ CHEDRAUI BUDIB",
+        "rmvb": "RAFAEL MORENO VALLE BUITRÓN",
+        "rafamorenovalle": "RAFAEL MORENO VALLE BUITRÓN",
+        "rafaelmorenovalle": "RAFAEL MORENO VALLE BUITRÓN",
+        "carolinabeau": "CAROLINA BEAUREGARD MARTÍNEZ",
+        "carolinabeauregard": "CAROLINA BEAUREGARD MARTÍNEZ",
+        "genovevahuerta": "GENOVEVA HUERTA VILLEGAS",
+        "gabrielasanchez": "GABRIELA SÁNCHEZ SAAVEDRA",
+        "lauraartemisa": "LAURA ARTEMISA GARCÍA CHÁVEZ",
+        "lupitacuautle": "GUADALUPE CUAUTLE TORRES",
+        "guadalupecuautle": "GUADALUPE CUAUTLE TORRES",
+        "tonantzinfernandez": "TONANTZIN FERNÁNDEZ DÍAZ",
+        "lizsanchez": "LIZETH SÁNCHEZ GARCÍA",
+        "lizethsanchez": "LIZETH SÁNCHEZ GARCÍA",
+        "nestorcamarillo": "NESTOR CAMARILLO MEDINA",
+        "celinapena": "CELINA PEÑA GUZMÁN",
+        "rodrigoabdala": "RODRIGO ABDALA DARTIGUES",
+        "delfinapozos": "DELFINA POZOS VERGARA",
+        "xitlalicceja": "XITLALIC CEJA GARCÍA",
+        "blancaalcala": "BLANCA ALCALÁ RUIZ"
+    }
+    for alias, canon in alias_map.items():
+        if alias in t_clean or t_clean in alias:
+            return canon
+    return str(nombre).strip().upper()
 
 # --- PATRONES INSTITUCIONALES UNIVERSALES ---
 PATRONES_INSTITUCIONALES_GENERICOS = [
@@ -266,6 +298,48 @@ def estandarizar_categoria_medio(m_type_raw):
     elif any(k in t_norm for k in ["redes", "social", "twitter", "facebook", "instagram", "tiktok", "youtube", "x"]):
         return "REDES SOCIALES"
     return "PORTALES DIGITALES"
+
+def reparar_desfase_columnas_excel(df):
+    if df is None or df.empty:
+        return df
+        
+    cols = [str(c).strip() for c in df.columns]
+    
+    # Detectar si la columna 'Hora' contiene nombres de entidades federativas
+    # o si 'Alcance' contiene enlaces web debido a un desplazamiento por columna extra
+    es_desfasado_por_hora = False
+    if "Hora" in cols:
+        sample_hora = df["Hora"].dropna().astype(str).head(10).tolist()
+        no_son_horas = any(re.match(r'^(Puebla|M[eé]xico|Tlaxcala|Veracruz|CDMX|Hidalgo|Nacional|Internacional)$', v.strip(), re.I) for v in sample_hora)
+        if no_son_horas:
+            es_desfasado_por_hora = True
+            
+    if "Alcance" in cols and not es_desfasado_por_hora:
+        sample_alcance = df["Alcance"].dropna().astype(str).head(10).tolist()
+        if any(v.startswith("http") for v in sample_alcance):
+            es_desfasado_por_hora = True
+
+    if es_desfasado_por_hora:
+        columnas_reales_ordenadas = [
+            "ID Nota", "Menu", "Titulo", "Autor", "Fecha", 
+            "Estado", "Pais", "Nombre del Medio", "Tipo de Medio", 
+            "Tipo de Nota", "Sentimiento", "Costo", "Alcance", 
+            "Link URL Medio", "Link de Nota"
+        ]
+        
+        df_reparado = pd.DataFrame()
+        raw_matrix = df.values
+        
+        for idx_col, col_name in enumerate(columnas_reales_ordenadas):
+            if idx_col < raw_matrix.shape:
+                df_reparado[col_name] = raw_matrix[:, idx_col]
+            else:
+                df_reparado[col_name] = np.nan
+                
+        df_reparado["Hora"] = ""
+        return df_reparado
+        
+    return df
 
 def clasificar_lote_con_ia(lista_notas, actor_nombre):
     prompt = f"""
@@ -456,6 +530,9 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
     if df_hoja is None or df_hoja.empty:
         return None
 
+    # Auto-reparar posibles desfasamientos humanos de columnas en Excel
+    df_hoja = reparar_desfase_columnas_excel(df_hoja)
+
     texto_primer_renglon = " ".join([str(v) for v in df_hoja.iloc[0].dropna().values]).strip() if len(df_hoja) > 0 else ""
     texto_columnas = " ".join([str(c) for c in df_hoja.columns]).strip()
 
@@ -485,6 +562,11 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
 
     if len(df_filtrado) == 0:
         return None
+
+    # Descartar duplicados si se fusionaron múltiples archivos
+    subset_dup = [c for c in ["ID Nota", "Titulo", "Link de Nota", "Link URL Medio"] if c in df_filtrado.columns]
+    if len(subset_dup) > 0:
+        df_filtrado = df_filtrado.drop_duplicates(subset=subset_dup)
 
     df_filtrado["fecha_str"] = df_filtrado["fecha_dt"].dt.strftime("%d.%m.%2y")
 
@@ -777,9 +859,9 @@ tipo_analisis = st.radio(
     "¿Qué tipo de archivo vas a analizar?",
     [
         "Redes Sociales",
-        "Medios Tradicionales / Portales / TV y Radio"
+        "Medios Tradicionales / Portales / TV y Radio (Multi-Archivo)"
     ],
-    index=0
+    index=1
 )
 
 if tipo_analisis == "Redes Sociales":
@@ -813,79 +895,19 @@ if tipo_analisis == "Redes Sociales":
                     st.error(f"Error procesando el archivo: {str(e)}")
 
 else:
-    uploaded_file = st.file_uploader(
-        "Sube tu archivo Excel de Medios Tradicionales (TV, Radio, Portales o Prensa)",
-        type=["xlsx", "xls", "csv"]
+    uploaded_files = st.file_uploader(
+        "Sube uno o varios archivos Excel (ej. Archivo de TV/Radio y Archivo de Portales Web)",
+        type=["xlsx", "xls", "csv"],
+        accept_multiple_files=True
     )
 
-    if uploaded_file:
+    if uploaded_files and len(uploaded_files) > 0:
         try:
-            dict_hojas = cargar_archivo_seguro(uploaded_file)
-            hojas_disponibles = list(dict_hojas.keys())
-            
-            st.subheader("Hojas / Candidatos detectados en el archivo:")
-            st.write(", ".join(hojas_disponibles))
+            # 1. Unificar todos los archivos y mapear hojas por candidato
+            candidatos_unificados = {}
 
-            modo = st.radio(
-                "Selecciona la modalidad de descarga:",
-                ["Generar un Candidato Específico", "Generar TODOS los Candidatos en un archivo .ZIP (Masivo)"],
-                index=0
-            )
-
-            if modo == "Generar un Candidato Específico":
-                hoja_sel = st.selectbox("Selecciona la hoja a procesar:", hojas_disponibles)
-                if st.button("Generar Reporte de esta Hoja", type="primary"):
-                    with st.spinner("Procesando notas y generando documento..."):
-                        df_h = dict_hojas[hoja_sel]
-                        if 'Menu' in df_h.columns and len(df_h['Menu'].dropna()) > 0:
-                            nombre_h = str(df_h['Menu'].dropna().iloc[0]).strip()
-                        else:
-                            nombre_h = hoja_sel
-
-                        buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False)
-                        if buf is not None:
-                            st.success(f"¡Reporte generado exitosamente para '{nombre_h}'!")
-                            st.download_button(
-                                label=f"📥 Descargar Reporte Word de {nombre_h}",
-                                data=buf,
-                                file_name=f"Reporte_{nombre_h.replace(' ', '_')}.docx",
-                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                            )
-                        else:
-                            st.warning(f"La hoja '{hoja_sel}' no contiene notas registradas.")
-
-            else:
-                if st.button("Generar y Descargar TODOS los Reportes en .ZIP", type="primary"):
-                    with st.spinner("Generando reportes individuales para todas las hojas..."):
-                        zip_buffer = io.BytesIO()
-                        cnt_generados = 0
-                        
-                        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                            for h_key in hojas_disponibles:
-                                df_h = dict_hojas[h_key]
-                                if 'Menu' in df_h.columns and len(df_h['Menu'].dropna()) > 0:
-                                    nombre_h = str(df_h['Menu'].dropna().iloc[0]).strip()
-                                else:
-                                    nombre_h = h_key
-
-                                buf = crear_doc_desde_hoja(df_h, nombre_h, es_redes_sociales=False)
-                                if buf is not None:
-                                    doc_bytes = buf.getvalue()
-                                    fname = f"Reporte_{nombre_h.replace(' ', '_')}.docx"
-                                    zip_file.writestr(fname, doc_bytes)
-                                    cnt_generados += 1
-
-                        zip_buffer.seek(0)
-                        if cnt_generados > 0:
-                            st.success(f"¡Se generaron con éxito {cnt_generados} reportes individuales!")
-                            st.download_button(
-                                label="📦 Descargar Archivo .ZIP con TODOS los Reportes",
-                                data=zip_buffer,
-                                file_name="Reportes_Tradicionales_Completos.zip",
-                                mime="application/zip"
-                            )
-                        else:
-                            st.warning("No se encontraron hojas con notas activas para generar los reportes.")
+            for file in uploaded_files:
+                dict_hojas = cargar_archivo_seguro(file)
 
         except Exception as e:
             st.error(f"Error procesando el archivo: {str(e)}")
