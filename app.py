@@ -76,6 +76,8 @@ model_redactor = genai.GenerativeModel(
 )
 
 def quitar_acentos(texto):
+    if texto is None or pd.isna(texto):
+        return ""
     return ''.join(c for c in unicodedata.normalize('NFD', str(texto)) if unicodedata.category(c) != 'Mn').lower()
 
 def normalizar_cadena(texto):
@@ -170,14 +172,19 @@ def cargar_archivo_seguro(file):
 def obtener_campo(row, lista_cols):
     for c in lista_cols:
         if c in row.index:
-            v = str(row[c]).strip()
-            if v and v != "nan" and v != "None":
-                return v
-        for col_existente in row.index:
-            if str(col_existente).strip().lower() == c.lower() or quitar_acentos(col_existente) == quitar_acentos(c):
-                v = str(row[col_existente]).strip()
-                if v and v != "nan" and v != "None":
+            val = row[c]
+            if val is not None and not pd.isna(val):
+                v = str(val).strip()
+                if v and v.lower() not in ["nan", "none", "null"]:
                     return v
+        for col_existente in row.index:
+            col_str = str(col_existente).strip()
+            if col_str.lower() == c.lower() or quitar_acentos(col_str) == quitar_acentos(c):
+                val = row[col_existente]
+                if val is not None and not pd.isna(val):
+                    v = str(val).strip()
+                    if v and v.lower() not in ["nan", "none", "null"]:
+                        return v
     return ""
 
 def obtener_columna_serie(df_data, lista_posibles_cols):
@@ -185,7 +192,8 @@ def obtener_columna_serie(df_data, lista_posibles_cols):
         if c in df_data.columns:
             return df_data[c]
         for col_existente in df_data.columns:
-            if str(col_existente).strip().lower() == c.lower() or quitar_acentos(col_existente) == quitar_acentos(c):
+            col_str = str(col_existente).strip()
+            if col_str.lower() == c.lower() or quitar_acentos(col_str) == quitar_acentos(c):
                 return df_data[col_existente]
     return pd.Series([""] * len(df_data), index=df_data.index)
 
@@ -242,8 +250,9 @@ def limpiar_texto(texto):
     return "\n".join(lineas)
 
 def estandarizar_categoria_medio(m_type_raw):
-    t = str(m_type_raw).strip()
-    t_norm = quitar_acentos(t)
+    if m_type_raw is None or pd.isna(m_type_raw):
+        return "PORTALES DIGITALES"
+    t_norm = quitar_acentos(str(m_type_raw).strip())
     if "tele" in t_norm or "tv" in t_norm:
         return "TELEVISIÓN"
     elif "rad" in t_norm or "fm" in t_norm or "am" in t_norm:
@@ -288,7 +297,7 @@ Responde ÚNICAMENTE un JSON válido con este formato exacto:
     except Exception:
         res_map = {}
         for item in lista_notas:
-            t = item["texto"].lower()
+            t = str(item.get("texto", "")).lower()
             es_logro_disminucion = any(k in t for k in ["disminuye", "disminución", "bajan", "reduccion", "cae", "a la baja"]) and any(k in t for k in ["delito", "robo", "incidencia", "homicidio"])
             es_acuerdo_laboral = any(k in t for k in ["sindicato", "convenio", "acuerdo laboral", "prestaciones", "condiciones de trabajo"])
             
@@ -306,11 +315,11 @@ def determinar_sentimiento_df(df_data, actor_nombre_target, es_tradicionales):
     if es_tradicionales:
         sent_col_name = None
         for col_name in df_data.columns:
-            if quitar_acentos(col_name) in ["sentimiento", "sentiment", "sentimiento de la nota", "tono", "sentimiento nota"]:
+            if quitar_acentos(str(col_name)) in ["sentimiento", "sentiment", "sentimiento de la nota", "tono", "sentimiento nota"]:
                 sent_col_name = col_name
                 break
         if sent_col_name:
-            sent_series = df_data[sent_col_name].astype(str).str.lower()
+            sent_series = df_data[sent_col_name].fillna("").astype(str).str.lower()
             return sent_series.apply(lambda s: "NEGATIVA" if any(k in s for k in ["negat", "critica", "contra"]) else "POSITIVA").tolist()
 
     sentimientos_finales = ["POSITIVA"] * len(df_data)
@@ -347,7 +356,7 @@ def extraer_resumen_temas_real(df_data, actor_nombre):
     columnas_posibles_texto = ["Titulo", "Título", "Contenido", "Detail", "Summary", "Síntesis", "Sintesis", "Encabezado", "Tema", "Nota", "Title"]
     
     for col in columnas_posibles_texto:
-        if col in pos_df.columns or any(quitar_acentos(c) == quitar_acentos(col) for c in pos_df.columns):
+        if col in pos_df.columns or any(quitar_acentos(str(c)) == quitar_acentos(col) for c in pos_df.columns):
             serie_t = obtener_columna_serie(pos_df, [col])
             pos_textos = [t for t in serie_t.dropna().astype(str).tolist() if "teaser" not in t.lower() and len(t.strip()) > 10]
             if len(pos_textos) > 0:
@@ -355,7 +364,7 @@ def extraer_resumen_temas_real(df_data, actor_nombre):
 
     neg_textos = []
     for col in columnas_posibles_texto:
-        if col in neg_df.columns or any(quitar_acentos(c) == quitar_acentos(col) for c in neg_df.columns):
+        if col in neg_df.columns or any(quitar_acentos(str(c)) == quitar_acentos(col) for c in neg_df.columns):
             serie_t = obtener_columna_serie(neg_df, [col])
             neg_textos = [t for t in serie_t.dropna().astype(str).tolist() if "teaser" not in t.lower() and len(t.strip()) > 10]
             if len(neg_textos) > 0:
@@ -426,6 +435,15 @@ NOTICIAS NEGATIVAS DISPONIBLES ({len(neg_textos)} notas):
     return "\n".join(lineas_res)
 
 def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
+    if df_hoja is None or df_hoja.empty:
+        return None
+
+    texto_primer_renglon = " ".join([str(v) for v in df_hoja.iloc[0].dropna().values]).strip() if len(df_hoja) > 0 else ""
+    texto_columnas = " ".join([str(c) for c in df_hoja.columns]).strip()
+
+    if "sin notas" in texto_primer_renglon.lower() or "sin notas" in texto_columnas.lower():
+        return None
+
     if es_redes_sociales:
         df_filtrado, total_descartadas = limpiar_dataframe_redes_automatico(df_hoja, nombre_hoja)
         if total_descartadas > 0:
@@ -434,9 +452,6 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
         df_filtrado = df_hoja.copy()
 
     if len(df_filtrado) == 0:
-        return None
-
-    if "sin notas" in str(df_filtrado.iloc[0].values).lower():
         return None
 
     serie_fechas_raw = obtener_columna_serie(
