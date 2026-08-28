@@ -57,7 +57,12 @@ def obtener_api_key_gemini():
 GEMINI_API_KEY = obtener_api_key_gemini()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.7-flash").strip()
 CLIENTE_GEMINI = (
-    genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+    genai.Client(
+        api_key=GEMINI_API_KEY,
+        http_options={"timeout": 60000},
+    )
+    if GEMINI_API_KEY
+    else None
 )
 if not GEMINI_API_KEY:
   st.warning(
@@ -686,7 +691,7 @@ def normalizar_resultado_ia(item, ids_esperados):
   }
 
 
-def clasificar_lote_con_ia(lista_notas, actor_nombre, max_intentos=2):
+def clasificar_lote_con_ia(lista_notas, actor_nombre, max_intentos=1):
   if CLIENTE_GEMINI is None:
     raise RuntimeError(
         "No se encontró GEMINI_API_KEY. Configúrala en las variables del entorno"
@@ -859,15 +864,19 @@ def determinar_sentimiento_df(df_data, actor_nombre_target, es_tradicionales):
 
   df_eval = df_data.reset_index(drop=True)
   resultados_finales = [None] * len(df_eval)
-  lote_tamano = 10
+  lote_tamano = 15
   total_lotes = (len(df_eval) + lote_tamano - 1) // lote_tamano
   progreso = st.progress(0)
+  estado_progreso = st.empty()
   fallos_respaldo = 0
   errores = []
 
   for l_idx in range(total_lotes):
     inicio = l_idx * lote_tamano
     sub_df = df_eval.iloc[inicio : inicio + lote_tamano]
+    estado_progreso.info(
+        f"Analizando lote {l_idx + 1} de {total_lotes} con Gemini..."
+    )
     lista_lote = [
         construir_registro_para_ia(row, local_id)
         for local_id, (_, row) in enumerate(sub_df.iterrows())
@@ -876,8 +885,13 @@ def determinar_sentimiento_df(df_data, actor_nombre_target, es_tradicionales):
     try:
       res_map = clasificar_lote_con_ia(lista_lote, actor_nombre_target)
     except Exception as exc:
-      res_map = {}
-      errores.append(str(exc))
+      progreso.empty()
+      estado_progreso.empty()
+      raise RuntimeError(
+          "Gemini no pudo procesar el lote de prueba. El análisis se detuvo"
+          " para evitar cientos de reintentos. Verifica la API key, la cuota y"
+          f" el modelo configurado. Detalle: {str(exc)[:350]}"
+      ) from exc
 
     for local_id, registro in enumerate(lista_lote):
       resultado = res_map.get(local_id)
@@ -898,6 +912,7 @@ def determinar_sentimiento_df(df_data, actor_nombre_target, es_tradicionales):
     progreso.progress((l_idx + 1) / max(total_lotes, 1))
 
   progreso.empty()
+  estado_progreso.empty()
 
   limite_fallos = max(3, int(len(df_eval) * 0.10))
   if fallos_respaldo > limite_fallos:
