@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import time
 import unicodedata
 import zipfile
 from docx import Document
@@ -11,7 +12,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls
 from docx.shared import Inches, Pt, RGBColor
-import google.generativeai as genai
+from google import genai
 import pandas as pd
 import streamlit as st
 
@@ -42,52 +43,114 @@ st.write(
     " consolidado."
 )
 
-# API Key Pre-integrada
-GEMINI_API_KEY = "AQ.Ab8RN6LoOHgBblHSIETp2LjyBofO48YsSqSeojXYFAAKGvFa0w"
-genai.configure(api_key=GEMINI_API_KEY)
+def obtener_api_key_gemini():
+  """Lee la clave sin incrustarla en el repositorio."""
+  api_key = os.getenv("GEMINI_API_KEY", "").strip()
+  if api_key:
+    return api_key
+  try:
+    return str(st.secrets["GEMINI_API_KEY"]).strip()
+  except Exception:
+    return ""
+
+
+GEMINI_API_KEY = obtener_api_key_gemini()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.7-flash").strip()
+CLIENTE_GEMINI = (
+    genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+)
+if not GEMINI_API_KEY:
+  st.warning(
+      "Falta configurar GEMINI_API_KEY. Los reportes tradicionales seguirán"
+      " funcionando con el sentimiento incluido en sus archivos, pero necesitas"
+      " la clave para analizar redes sociales."
+  )
 
 # ==============================================================================
 # BASE DE CONOCIMIENTO Y CRITERIOS UNIVERSALES DE CLASIFICACIÓN POLÍTICA
 # ==============================================================================
 SYSTEM_PROMPT_UNIVERSAL = """
-Eres un analista senior de inteligencia política, comunicación estratégica y control de daños.
-Tu objetivo es clasificar publicaciones para el ACTOR POLÍTICO OBJETIVO evaluando el texto desde su perspectiva directa (beneficio reputacional vs. afectación/crisis).
+Actúa como analista senior de reputación y comunicación política. Evalúa cada
+publicación DESDE LA PERSPECTIVA DEL ACTOR POLÍTICO OBJETIVO: imagina que el
+propio actor lee la nota y determina si la mención beneficia/informa sobre su
+imagen o si puede perjudicarla, cuestionarla o abrir una crisis.
 
-Determina el impacto reputacional exclusivamente en una de dos categorías: 'POSITIVA' o 'NEGATIVA'.
+El reporte utiliza dos grupos:
+- POSITIVA: también incluye menciones neutrales o meramente informativas.
+- NEGATIVA: incluye cualquier afectación reputacional directa o atribuible.
 
-==============================================================================
-REGLAS FUNDAMENTALES DE EVALUACIÓN (PERSPECTIVA DEL ACTOR):
-==============================================================================
+PROCESO OBLIGATORIO PARA CADA PUBLICACIÓN:
+1. Determina si realmente habla del actor objetivo. Si es un homónimo, otra
+   persona, una coincidencia de nombre o el actor no aparece, marca
+   relevante=false. No inventes una relación.
+2. En resúmenes con varias noticias, aísla únicamente el fragmento donde aparece
+   el actor. No traslades al actor hechos negativos de otras notas.
+3. Marca NEGATIVA cuando el texto atribuya, denuncie, sugiera o reproduzca una
+   crítica que razonablemente pueda perjudicar al actor, aunque sea una cita,
+   acusación no comprobada, pregunta retórica, opinión, sátira o declaración de
+   un adversario. No evalúes si la acusación es verdadera; evalúa su impacto.
+4. Son NEGATIVAS, entre otras: señalamientos de corrupción, ilegalidad, abuso,
+   opacidad, nepotismo, desvío o uso indebido de recursos; promoción o campaña
+   anticipada; bardas o lonas cuestionadas; investigaciones, sanciones o
+   denuncias; críticas a capacidad, legitimidad o resultados; reclamos por
+   fallas del área bajo su responsabilidad; favoritismo, piso disparejo,
+   ventajas injustas, conflictos internos y hashtags ofensivos dirigidos al
+   actor.
+5. Si una publicación mezcla logros con una crítica directa relevante, la
+   crítica prevalece y se clasifica NEGATIVA.
+6. Marca POSITIVA cuando la mención sea favorable o informativa sin reproche:
+   agenda, declaraciones, eventos, obras, apoyos, convenios, resultados,
+   reconocimientos, respaldos, defensa frente a ataques o especulación política
+   descriptiva sin cuestionamiento.
 
-1. REGLA DE ORO PARA NOTICIEROS Y RESÚMENES MULTITEMA (ROUNDUPS / RESÚMENES MATUTINOS):
-   - En publicaciones que agrupan varias noticias del día (ej. "Buenos días", resúmenes de prensa, cápsulas informativas), evalúa ÚNICAMENTE el fragmento o párrafo donde se menciona al ACTOR POLÍTICO OBJETIVO.
-   - Si la mención del actor objetivo es informativa o favorable (ej. agenda de trabajo, declaraciones, eventos, descarte de renuncia), y las otras notas del resumen hablan de homicidios, asaltos en otros municipios, alza de precios o notas de otros personajes, la publicación DEBE CLASIFICARSE COMO 'POSITIVA' / INFORMATIVA para el actor evaluado.
-   - NUNCA clasifiques como negativa una publicación por sucesos ajenos que no involucran ni señalan la responsabilidad directa del actor.
+EJEMPLOS DE CALIBRACIÓN:
+- "Laura Artemisa: el arte de violar la ley" -> NEGATIVA.
+- "Acusan promoción anticipada y cuestionan el origen de recursos para bardas"
+  -> NEGATIVA.
+- "En Morena piden piso parejo y señalan una ventaja injusta para Artemisa"
+  -> NEGATIVA.
+- "Laura Artemisa entregó recursos para obra comunitaria" -> POSITIVA.
+- Una nota sobre una soprano llamada Laura Artemisa, distinta de la funcionaria
+  evaluada -> relevante=false.
 
-2. RESPALDOS POLÍTICOS, CIERRE DE FILAS Y DEFENSA FRENTE A ATAQUES:
-   - Cuando el Gobernador, el partido, activistas u otros liderazgos defienden, respaldan, elogian o condenan agresiones/violencia política contra el actor objetivo, clasifícala como 'POSITIVA' / INFORMATIVA (representa respaldo político, solidaridad y fortalecimiento de su posición pública).
-
-3. CLASIFICA ESTRICTAMENTE COMO 'NEGATIVA' (Afectación directa, crítica o crisis):
-   - DENUNCIAS Y ACUSACIONES DIRECTAS: Señalamientos de corrupción, actos anticipados de campaña, propaganda ilegal no deseada, opacidad, nepotismo, desvíos, auditorías o denuncias penales dirigidas al actor o a su equipo directo.
-   - CRÍTICA POLÍTICA Y EDITORIAL EN SU CONTRA: Columnas de opinión, editoriales o publicaciones que cuestionen negativamente su desempeño, capacidad, legitimidad o lo señalen como involucrado en pugnas destructivas.
-   - RECLAMOS CIUDADANOS Y CRISIS DE SU COMPETENCIA DIRECTA: Quejas y protestas ciudadanas dirigidas a las áreas bajo su responsabilidad directa (ej. si es alcalde: baches, basura, seguridad municipal; si es secretario de área: fallas directas en sus programas o dependencias).
-   - HASHTAGS DE ATAQUE O LENGUAJE OFENSIVO DIRIGIDO AL ACTOR: #corrupcion, #rateros, #incompetente, #fraude, etc.
-
-4. CLASIFICA COMO 'POSITIVA' / INFORMATIVA (Agenda, Cobertura y Posicionamiento):
-   - OBRAS, ACTIVIDADES Y LOGROS: Entrega de apoyos, eventos deportivos/culturales, convenios, clases masivas, inauguraciones y resultados de gestión.
-   - DECLARACIONES Y POSTURA OFICIAL: Entrevistas, discursos, comunicados, posturas sobre su carrera o iniciativas.
-   - POSICIONAMIENTO Y ACTIVIDAD POLÍTICA: Asistencia a eventos partidistas, llamados a la unidad, sondeos favorables o notas de análisis que destaquen su perfil hacia futuros procesos electorales.
+Devuelve una decisión por cada id recibido. La explicación debe ser breve,
+concreta y referirse al impacto sobre el actor.
 """
 
-model_clasificador = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
-    system_instruction=SYSTEM_PROMPT_UNIVERSAL,
-    generation_config={"temperature": 0.0},
-)
 
-model_redactor = genai.GenerativeModel(
-    model_name="gemini-1.5-flash", generation_config={"temperature": 0.2}
-)
+SCHEMA_CLASIFICACION = {
+    "type": "object",
+    "properties": {
+        "resultados": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer"},
+                    "relevante": {"type": "boolean"},
+                    "sentimiento": {
+                        "type": "string",
+                        "enum": ["POSITIVA", "NEGATIVA"],
+                    },
+                    "confianza": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                    },
+                    "motivo": {"type": "string"},
+                },
+                "required": [
+                    "id",
+                    "relevante",
+                    "sentimiento",
+                    "confianza",
+                    "motivo",
+                ],
+            },
+        }
+    },
+    "required": ["resultados"],
+}
 
 
 def quitar_acentos(texto):
@@ -413,43 +476,37 @@ def obtener_columna_serie(df_data, lista_posibles_cols):
 
 
 def parsear_fecha_perfecta(val):
-  if not val or pd.isna(val) or str(val).strip() in ["nan", "None", ""]:
+  if val is None or pd.isna(val) or str(val).strip() in ["nan", "None", ""]:
     return pd.NaT
+
+  if isinstance(val, (datetime, pd.Timestamp)):
+    return pd.Timestamp(val).to_pydatetime()
 
   s = str(val).strip()
   if "," in s:
     s = s.split(",")[0].strip()
-  s_date = s.split(" ")[0].strip()
+  s_date = re.split(r"[ T]", s, maxsplit=1)[0].strip()
 
-  if "-" in s_date:
+  match_iso = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", s_date)
+  if match_iso:
     try:
-      parts = s_date.split("-")
-      if len(parts) == 3:
-        if len(parts[0]) == 4:
-          return datetime(int(parts[0]), int(parts), int(parts))
-        elif len(parts) == 4:
-          return datetime(int(parts), int(parts), int(parts[0]))
-    except Exception:
-      pass
+      y, m, d = map(int, match_iso.groups())
+      return datetime(y, m, d)
+    except ValueError:
+      return pd.NaT
 
-  if "/" in s_date:
+  match_latam = re.fullmatch(r"(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})", s_date)
+  if match_latam:
     try:
-      parts = s_date.split("/")
-      if len(parts) == 3:
-        if len(parts[0]) == 4:
-          return datetime(int(parts[0]), int(parts), int(parts))
-        else:
-          d = int(parts[0])
-          m = int(parts)
-          y = int(parts)
-          if y < 100:
-            y += 2000
-          return datetime(y, m, d)
-    except Exception:
-      pass
+      d, m, y = map(int, match_latam.groups())
+      if y < 100:
+        y += 2000
+      return datetime(y, m, d)
+    except ValueError:
+      return pd.NaT
 
   try:
-    return pd.to_datetime(s_date, dayfirst=True, errors="coerce")
+    return pd.to_datetime(s, dayfirst=True, errors="coerce")
   except Exception:
     return pd.NaT
 
@@ -559,111 +616,311 @@ def reparar_desfase_columnas_excel(df):
   return df
 
 
-def clasificar_lote_con_ia(lista_notas, actor_nombre):
+def construir_registro_para_ia(row, local_id):
+  """Combina título y contenido; no entrega a la IA solo la primera columna."""
+  titulo = obtener_campo(
+      row,
+      ["Titulo", "Título", "Title", "Encabezado", "Tema"],
+  )
+  contenido = obtener_campo(
+      row,
+      ["Contenido", "Detail", "Summary", "Síntesis", "Sintesis", "Nota"],
+  )
+  autor = obtener_campo(
+      row,
+      ["Autor", "Author name", "Author", "Fuente", "Nombre del Medio"],
+  )
+  handle = obtener_campo(
+      row,
+      ["Author handle (@username)", "Handle", "Username", "Screen Name"],
+  )
+  medio = obtener_campo(
+      row,
+      ["Nombre del Medio", "Media name", "Fuente", "Medio", "Canal"],
+  )
+
+  partes = []
+  for valor in [titulo, contenido]:
+    valor_limpio = limpiar_texto_para_resumen(str(valor))
+    if valor_limpio and valor_limpio not in partes:
+      partes.append(valor_limpio)
+
+  texto = "\n".join(partes).strip()
+  if len(texto) > 4500:
+    texto = texto[:4500]
+
+  return {
+      "id": local_id,
+      "autor": autor[:250],
+      "handle": handle[:150],
+      "medio": medio[:250],
+      "texto": texto,
+  }
+
+
+def normalizar_resultado_ia(item, ids_esperados):
+  if not isinstance(item, dict):
+    return None
+  try:
+    item_id = int(item.get("id"))
+  except (TypeError, ValueError):
+    return None
+  if item_id not in ids_esperados:
+    return None
+
+  sentimiento = str(item.get("sentimiento", "")).strip().upper()
+  if sentimiento not in {"POSITIVA", "NEGATIVA"}:
+    return None
+
+  try:
+    confianza = float(item.get("confianza", 0.5))
+  except (TypeError, ValueError):
+    confianza = 0.5
+
+  return {
+      "sentimiento": sentimiento,
+      "relevante": bool(item.get("relevante", True)),
+      "confianza": min(1.0, max(0.0, confianza)),
+      "motivo": str(item.get("motivo", "Decisión de la IA."))[:350],
+      "origen": "IA",
+  }
+
+
+def clasificar_lote_con_ia(lista_notas, actor_nombre, max_intentos=2):
+  if CLIENTE_GEMINI is None:
+    raise RuntimeError(
+        "No se encontró GEMINI_API_KEY. Configúrala en las variables del entorno"
+        " o en .streamlit/secrets.toml antes de generar el reporte."
+    )
+
   prompt = f"""
-Clasifica las siguientes publicaciones respecto al actor político: "{actor_nombre}".
-Aplica estrictamente las reglas:
-- En noticieros o resúmenes con varias notas (roundups), evalúa ÚNICAMENTE el impacto de la mención sobre "{actor_nombre}". Si su mención es positiva/informativa, clasifica como 'POSITIVA' sin importar que haya notas rojas o de otros temas en el post.
-- Respaldos del Gobernador o de otros liderazgos en defensa del actor frente a ataques son 'POSITIVA'.
-- Solo clasifica como 'NEGATIVA' si hay una acusación, crítica, denuncia o crisis directa contra "{actor_nombre}" o su área de responsabilidad.
+{SYSTEM_PROMPT_UNIVERSAL}
+
+ACTOR POLÍTICO OBJETIVO: "{actor_nombre}"
 
 PUBLICACIONES A EVALUAR:
 {json.dumps(lista_notas, ensure_ascii=False)}
-
-Responde ÚNICAMENTE un JSON válido con este formato exacto:
-[
-  {{"id": 0, "sentimiento": "POSITIVA"}},
-  {{"id": 1, "sentimiento": "NEGATIVA"}}
-]
 """
-  try:
-    response = model_clasificador.generate_content(prompt)
-    raw_txt = response.text.strip()
-    raw_txt = re.sub(r"^```json\s*", "", raw_txt, flags=re.I)
-    raw_txt = re.sub(r"^```\s*", "", raw_txt)
-    raw_txt = re.sub(r"\s*```$", "", raw_txt)
+  ids_esperados = {int(item["id"]) for item in lista_notas}
+  ultimo_error = None
 
-    datos = json.loads(raw_txt)
-    res_map = {}
-    for item in datos:
-      sent = item.get("sentimiento", "POSITIVA").upper()
-      res_map[item["id"]] = "NEGATIVA" if "NEGAT" in sent else "POSITIVA"
-    return res_map
-  except Exception:
-    res_map = {}
-    for item in lista_notas:
-      res_map[item["id"]] = "POSITIVA"
-    return res_map
+  for intento in range(max_intentos):
+    try:
+      interaction = CLIENTE_GEMINI.interactions.create(
+          model=GEMINI_MODEL,
+          input=prompt,
+          response_format={
+              "type": "text",
+              "mime_type": "application/json",
+              "schema": SCHEMA_CLASIFICACION,
+          },
+      )
+      raw_txt = (interaction.output_text or "").strip()
+      datos = json.loads(raw_txt)
+      items = datos.get("resultados", [])
+      if not isinstance(items, list):
+        raise ValueError("La respuesta no contiene una lista de resultados.")
+
+      res_map = {}
+      for item in items:
+        resultado = normalizar_resultado_ia(item, ids_esperados)
+        if resultado is not None:
+          res_map[int(item["id"])] = resultado
+
+      if not res_map:
+        raise ValueError("Gemini no devolvió decisiones válidas.")
+      return res_map
+    except Exception as exc:
+      ultimo_error = exc
+      if intento + 1 < max_intentos:
+        time.sleep(1.2 * (intento + 1))
+
+  raise RuntimeError(f"Gemini no respondió correctamente: {ultimo_error}")
+
+
+def clasificar_respaldo_local(texto, actor_nombre):
+  """Respaldo visible y conservador; nunca convierte un error en todo positivo."""
+  t = quitar_acentos(texto)
+  actor_tokens = [
+      token
+      for token in re.findall(r"[a-z0-9]+", quitar_acentos(actor_nombre))
+      if len(token) >= 4
+  ]
+  coincidencias_actor = sum(1 for token in set(actor_tokens) if token in t)
+
+  indicadores_homonimo = [
+      "soprano",
+      "cantante",
+      "feria del marisco",
+      "originaria de",
+      "concierto",
+  ]
+  if coincidencias_actor > 0 and any(x in t for x in indicadores_homonimo):
+    return {
+        "sentimiento": "POSITIVA",
+        "relevante": False,
+        "confianza": 0.75,
+        "motivo": "Posible homónimo sin relación con el actor político.",
+        "origen": "RESPALDO_LOCAL",
+    }
+
+  patrones_negativos = [
+      r"viola(?:r|ndo|cion)?.{0,25}(?:la )?ley",
+      r"promocion (?:personalizada|anticipada)",
+      r"actos? anticipados?",
+      r"origen de (?:los )?recursos",
+      r"uso (?:indebido|ilegal).{0,20}recursos",
+      r"recursos publicos",
+      r"corrup",
+      r"nepot",
+      r"desvio",
+      r"fraude",
+      r"ilegal",
+      r"irregular",
+      r"incompet",
+      r"opacidad",
+      r"denuncia",
+      r"acus[ao]",
+      r"investigad[ao]",
+      r"sancion",
+      r"piso parejo",
+      r"ventaja injusta",
+      r"favoritismo",
+      r"cuestion[ao]",
+      r"critica",
+      r"bardas?",
+      r"lonas?",
+  ]
+  hay_ataque = any(re.search(patron, t) for patron in patrones_negativos)
+  if hay_ataque and (coincidencias_actor > 0 or not actor_tokens):
+    return {
+        "sentimiento": "NEGATIVA",
+        "relevante": True,
+        "confianza": 0.62,
+        "motivo": "Se detectó un señalamiento reputacional directo.",
+        "origen": "RESPALDO_LOCAL",
+    }
+
+  return {
+      "sentimiento": "POSITIVA",
+      "relevante": True,
+      "confianza": 0.35,
+      "motivo": "Sin señalamiento negativo explícito en el respaldo local.",
+      "origen": "RESPALDO_LOCAL",
+  }
 
 
 def determinar_sentimiento_df(df_data, actor_nombre_target, es_tradicionales):
+  """Usa el archivo en tradicionales y Gemini exclusivamente en redes."""
   if es_tradicionales:
     sent_col_name = None
+    nombres_sentimiento = {
+        "sentimiento",
+        "sentiment",
+        "sentimiento de la nota",
+        "tono",
+        "sentimiento nota",
+    }
     for col_name in df_data.columns:
-      if quitar_acentos(str(col_name)) in [
-          "sentimiento",
-          "sentiment",
-          "sentimiento de la nota",
-          "tono",
-          "sentimiento nota",
-      ]:
+      if quitar_acentos(str(col_name).strip()) in nombres_sentimiento:
         sent_col_name = col_name
         break
-    if sent_col_name:
-      sent_series = df_data[sent_col_name].fillna("").astype(str).str.lower()
-      sentimientos_lista = []
-      for _, row in df_data.iterrows():
-        sent_raw = (
-            str(row[sent_col_name]).lower()
-            if sent_col_name in row.index
-            else ""
-        )
-        if any(k in sent_raw for k in ["negat", "critica", "contra"]):
-          sentimientos_lista.append("NEGATIVA")
-        else:
-          sentimientos_lista.append("POSITIVA")
-      return sentimientos_lista
 
-  # Evaluación de Redes Sociales con perspectiva de IA del actor político
+    if sent_col_name is None:
+      raise RuntimeError(
+          "El archivo de medios tradicionales no contiene una columna de"
+          " sentimiento. Para evitar una evaluación incorrecta basada solo en"
+          " el título, este reporte no se generó."
+      )
+
+    sentimientos_archivo = []
+    for valor in df_data[sent_col_name].fillna("").astype(str):
+      sent_raw = quitar_acentos(valor)
+      if any(k in sent_raw for k in ["negat", "critica", "contra"]):
+        sentimientos_archivo.append("NEGATIVA")
+      else:
+        sentimientos_archivo.append("POSITIVA")
+
+    return pd.DataFrame({
+        "sentimiento_final": sentimientos_archivo,
+        "relevante_ia": [True] * len(df_data),
+        "confianza_ia": [1.0] * len(df_data),
+        "motivo_ia": [
+            "Clasificación tomada directamente del archivo original."
+        ] * len(df_data),
+        "origen_clasificacion": ["ARCHIVO_ORIGINAL"] * len(df_data),
+    })
+
+  if CLIENTE_GEMINI is None:
+    raise RuntimeError(
+        "No se encontró GEMINI_API_KEY. El reporte no se generó para evitar"
+        " clasificar silenciosamente todas las notas como positivas."
+    )
+
   df_eval = df_data.reset_index(drop=True)
-  sentimientos_finales = ["POSITIVA"] * len(df_eval)
-  lote_tamano = 15
+  resultados_finales = [None] * len(df_eval)
+  lote_tamano = 10
   total_lotes = (len(df_eval) + lote_tamano - 1) // lote_tamano
-
   progreso = st.progress(0)
+  fallos_respaldo = 0
+  errores = []
 
   for l_idx in range(total_lotes):
-    sub_df = df_eval.iloc[l_idx * lote_tamano : (l_idx + 1) * lote_tamano]
-    lista_lote = []
-    for local_id, (_, row) in enumerate(sub_df.iterrows()):
-      texto = obtener_campo(
-          row,
-          [
-              "Contenido",
-              "Detail",
-              "Titulo",
-              "Título",
-              "Summary",
-              "Síntesis",
-              "Sintesis",
-              "Title",
-              "Encabezado",
-              "Tema",
-              "Nota",
-          ],
-      )
-      lista_lote.append({"id": local_id, "texto": texto})
+    inicio = l_idx * lote_tamano
+    sub_df = df_eval.iloc[inicio : inicio + lote_tamano]
+    lista_lote = [
+        construir_registro_para_ia(row, local_id)
+        for local_id, (_, row) in enumerate(sub_df.iterrows())
+    ]
 
-    res_map = clasificar_lote_con_ia(lista_lote, actor_nombre_target)
-    for local_id in range(len(sub_df)):
-      real_idx = l_idx * lote_tamano + local_id
-      if real_idx < len(sentimientos_finales):
-        sentimientos_finales[real_idx] = res_map.get(local_id, "POSITIVA")
+    try:
+      res_map = clasificar_lote_con_ia(lista_lote, actor_nombre_target)
+    except Exception as exc:
+      res_map = {}
+      errores.append(str(exc))
 
-    progreso.progress((l_idx + 1) / total_lotes)
+    for local_id, registro in enumerate(lista_lote):
+      resultado = res_map.get(local_id)
+      if resultado is None:
+        try:
+          resultado = clasificar_lote_con_ia(
+              [{**registro, "id": 0}], actor_nombre_target
+          ).get(0)
+        except Exception as exc:
+          errores.append(str(exc))
+          resultado = clasificar_respaldo_local(
+              registro.get("texto", ""), actor_nombre_target
+          )
+          fallos_respaldo += 1
+
+      resultados_finales[inicio + local_id] = resultado
+
+    progreso.progress((l_idx + 1) / max(total_lotes, 1))
 
   progreso.empty()
-  return sentimientos_finales
+
+  limite_fallos = max(3, int(len(df_eval) * 0.10))
+  if fallos_respaldo > limite_fallos:
+    detalle = errores[0][:300] if errores else "Error desconocido de la API."
+    raise RuntimeError(
+        "Gemini no pudo analizar suficientes notas y el reporte se detuvo para"
+        " evitar resultados engañosos. Revisa la API key, el modelo y la cuota."
+        f" Detalle: {detalle}"
+    )
+
+  if fallos_respaldo:
+    st.warning(
+        f"{fallos_respaldo} nota(s) no obtuvieron respuesta de Gemini y fueron"
+        " marcadas mediante un respaldo local conservador."
+    )
+
+  return pd.DataFrame({
+      "sentimiento_final": [r["sentimiento"] for r in resultados_finales],
+      "relevante_ia": [r["relevante"] for r in resultados_finales],
+      "confianza_ia": [r["confianza"] for r in resultados_finales],
+      "motivo_ia": [r["motivo"] for r in resultados_finales],
+      "origen_clasificacion": [r["origen"] for r in resultados_finales],
+  })
 
 
 def limpiar_texto_para_resumen(texto):
@@ -745,6 +1002,8 @@ REGLAS DE FORMATO Y ESTILO (OBLIGATORIAS):
    Temas negativos
    1. [Título del Eje]: [Descripción ejecutiva redactada formalmente].
    (Si no hay notas negativas, escribe: 1. No se registraron temas negativos en el periodo analizado.)
+5. Redacta como máximo tres puntos informativos y tres negativos. No repitas
+   encabezados ni dejes una sección sin contenido.
 
 NOTAS POSITIVAS DISPONIBLES:
 {json.dumps(pos_unicos[:25], ensure_ascii=False)}
@@ -753,12 +1012,53 @@ NOTAS NEGATIVAS DISPONIBLES:
 {json.dumps(neg_unicos[:25], ensure_ascii=False)}
 """
   try:
-    response = model_redactor.generate_content(prompt)
-    res_ia = response.text.strip()
+    interaction = CLIENTE_GEMINI.interactions.create(
+        model=GEMINI_MODEL,
+        input=prompt,
+    )
+    res_ia = (interaction.output_text or "").strip()
     if res_ia and len(res_ia) > 30 and len(res_ia) < 1800:
       if not res_ia.startswith("Temas relevantes informativos"):
         res_ia = "Temas relevantes informativos\n" + res_ia
-      return res_ia
+
+      lineas_limpias = []
+      encabezados_vistos = set()
+      for linea in res_ia.splitlines():
+        linea = linea.strip()
+        if not linea:
+          continue
+        linea_norm = quitar_acentos(linea).strip(": ")
+        if linea_norm in {
+            "temas relevantes informativos",
+            "temas negativos",
+        }:
+          if linea_norm in encabezados_vistos:
+            continue
+          encabezados_vistos.add(linea_norm)
+          linea = (
+              "Temas relevantes informativos"
+              if "relevantes" in linea_norm
+              else "Temas negativos"
+          )
+        lineas_limpias.append(linea)
+
+      if "temas negativos" not in encabezados_vistos:
+        lineas_limpias.append("Temas negativos")
+        encabezados_vistos.add("temas negativos")
+
+      idx_neg = lineas_limpias.index("Temas negativos")
+      if not neg_unicos:
+        lineas_limpias = lineas_limpias[: idx_neg + 1]
+        lineas_limpias.append(
+            "1. No se registraron temas negativos en el periodo analizado."
+        )
+      elif not any(
+          re.match(r"^\d+\.", linea)
+          for linea in lineas_limpias[idx_neg + 1 :]
+      ):
+        raise ValueError("La IA no redactó los temas negativos detectados.")
+
+      return "\n".join(lineas_limpias)
   except Exception:
     pass
 
@@ -889,7 +1189,22 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
   if len(subset_dup) > 0:
     df_filtrado = df_filtrado.drop_duplicates(subset=subset_dup)
 
-  df_filtrado["fecha_str"] = df_filtrado["fecha_dt"].dt.strftime("%d.%m.%2y")
+  df_filtrado = df_filtrado.reset_index(drop=True)
+  resultados_ia = determinar_sentimiento_df(
+      df_filtrado, nombre_hoja, es_tradicionales=not es_redes_sociales
+  )
+  for columna in resultados_ia.columns:
+    df_filtrado[columna] = resultados_ia[columna].values
+
+  total_irrelevantes = int((~df_filtrado["relevante_ia"]).sum())
+  df_filtrado = df_filtrado[df_filtrado["relevante_ia"]].copy()
+  if total_irrelevantes:
+    st.info(
+        f"La IA excluyó {total_irrelevantes} mención(es) por tratarse de"
+        " homónimos o publicaciones ajenas al actor evaluado."
+    )
+  if len(df_filtrado) == 0:
+    return None
 
   fechas_validas = df_filtrado["fecha_dt"]
   min_d = fechas_validas.min()
@@ -905,9 +1220,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
         f" {MESES_ES[max_d.month]} de {max_d.year}"
     )
 
-  df_filtrado["sentimiento_final"] = determinar_sentimiento_df(
-      df_filtrado, nombre_hoja, es_tradicionales=not es_redes_sociales
-  )
+  df_filtrado["fecha_str"] = df_filtrado["fecha_dt"].dt.strftime("%d.%m.%y")
 
   positivas_cnt = len(
       df_filtrado[df_filtrado["sentimiento_final"].isin(["POSITIVA", "NEUTRA"])]
@@ -1122,7 +1435,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
   ]
 
   for fecha_dt_val, sub_df in df_filtrado.groupby("fecha_dt", sort=True):
-    fecha_item = fecha_dt_val.strftime("%d.%m.%2y")
+    fecha_item = fecha_dt_val.strftime("%d.%m.%y")
 
     p_f = doc.add_paragraph()
     p_f.paragraph_format.space_before = Pt(10)
