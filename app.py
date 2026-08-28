@@ -55,7 +55,7 @@ def obtener_api_key_gemini():
 
 
 GEMINI_API_KEY = obtener_api_key_gemini()
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.7-flash").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
 CLIENTE_GEMINI = (
     genai.Client(
         api_key=GEMINI_API_KEY,
@@ -743,6 +743,48 @@ PUBLICACIONES A EVALUAR:
   raise RuntimeError(f"Gemini no respondió correctamente: {ultimo_error}")
 
 
+def es_error_no_recuperable_gemini(exc):
+  """Distingue cuota/credenciales de una demora que sí permite dividir lote."""
+  mensaje = quitar_acentos(str(exc))
+  indicadores = [
+      "429",
+      "quota",
+      "api key",
+      "api_key",
+      "permission denied",
+      "unauthenticated",
+      "not found",
+      "does not exist",
+  ]
+  return any(indicador in mensaje for indicador in indicadores)
+
+
+def clasificar_lote_adaptativo(lista_notas, actor_nombre):
+  """Divide lotes lentos sin repetir ids ni convertirlos en falsos positivos."""
+  try:
+    return clasificar_lote_con_ia(lista_notas, actor_nombre)
+  except Exception as exc:
+    if es_error_no_recuperable_gemini(exc):
+      raise
+    if len(lista_notas) <= 1:
+      registro = lista_notas[0]
+      return {
+          int(registro["id"]): clasificar_respaldo_local(
+              registro.get("texto", ""), actor_nombre
+          )
+      }
+
+    mitad = max(1, len(lista_notas) // 2)
+    resultado = {}
+    resultado.update(
+        clasificar_lote_adaptativo(lista_notas[:mitad], actor_nombre)
+    )
+    resultado.update(
+        clasificar_lote_adaptativo(lista_notas[mitad:], actor_nombre)
+    )
+    return resultado
+
+
 def clasificar_respaldo_local(texto, actor_nombre):
   """Respaldo visible y conservador; nunca convierte un error en todo positivo."""
   t = quitar_acentos(texto)
@@ -864,68 +906,90 @@ def determinar_sentimiento_df(df_data, actor_nombre_target, es_tradicionales):
 
   df_eval = df_data.reset_index(drop=True)
   resultados_finales = [None] * len(df_eval)
-  lote_tamano = 15
-  total_lotes = (len(df_eval) + lote_tamano - 1) // lote_tamano
+
+  # Se evalúa una sola vez cada texto idéntico, pero el resultado se vuelve a
+  # colocar en todas sus filas. Así se acelera sin eliminar repeticiones ni
+  # alterar los conteos del reporte.
+  registros_originales = [
+      construir_registro_para_ia(row, fila_id)
+      for fila_id, (_, row) in enumerate(df_eval.iterrows())
+  ]
+  clave_por_fila = []
+  registro_por_clave = {}
+  filas_por_clave = {}
+  for fila_id, registro in enumerate(registros_originales):
+    texto_normalizado = re.sub(
+        r"\s+", " ", quitar_acentos(registro.get("texto", ""))
+    ).strip()
+    clave = texto_normalizado or f"__fila_vacia_{fila_id}"
+    clave_por_fila.append(clave)
+    filas_por_clave.setdefault(clave, []).append(fila_id)
+    if clave not in registro_por_clave:
+      registro_por_clave[clave] = {**registro, "id": len(registro_por_clave)}
+
+  claves_unicas = list(registro_por_clave)
+  registros_unicos = [registro_por_clave[clave] for clave in claves_unicas]
+  cache_ia = st.session_state.setdefault("cache_sentimiento_ia", {})
+  prefijo_cache = quitar_acentos(actor_nombre_target).strip() + "|" + GEMINI_MODEL
+  pendientes = []
+  resultado_por_clave = {}
+  for clave, registro in zip(claves_unicas, registros_unicos):
+    cache_key = prefijo_cache + "|" + clave
+    if cache_key in cache_ia:
+      resultado_por_clave[clave] = cache_ia[cache_key]
+    else:
+      pendientes.append((clave, registro))
+
+  lote_tamano = 8
+  total_lotes = max(1, (len(pendientes) + lote_tamano - 1) // lote_tamano)
   progreso = st.progress(0)
   estado_progreso = st.empty()
   fallos_respaldo = 0
-  errores = []
 
   for l_idx in range(total_lotes):
     inicio = l_idx * lote_tamano
-    sub_df = df_eval.iloc[inicio : inicio + lote_tamano]
+    lote_pendiente = pendientes[inicio : inicio + lote_tamano]
+    if not lote_pendiente:
+      break
     estado_progreso.info(
-        f"Analizando lote {l_idx + 1} de {total_lotes} con Gemini..."
+        f"Analizando lote {l_idx + 1} de {total_lotes} con Gemini... "
+        f"({len(registros_unicos)} textos únicos de {len(df_eval)} publicaciones)"
     )
-    lista_lote = [
-        construir_registro_para_ia(row, local_id)
-        for local_id, (_, row) in enumerate(sub_df.iterrows())
-    ]
+    lista_lote = [{**registro, "id": local_id}
+                  for local_id, (_, registro) in enumerate(lote_pendiente)]
 
     try:
-      res_map = clasificar_lote_con_ia(lista_lote, actor_nombre_target)
+      res_map = clasificar_lote_adaptativo(lista_lote, actor_nombre_target)
     except Exception as exc:
       progreso.empty()
       estado_progreso.empty()
       raise RuntimeError(
-          "Gemini no pudo procesar el lote de prueba. El análisis se detuvo"
-          " para evitar cientos de reintentos. Verifica la API key, la cuota y"
-          f" el modelo configurado. Detalle: {str(exc)[:350]}"
+          "Gemini rechazó la solicitud. Revisa la API key, la cuota y el modelo"
+          f" configurado. Detalle: {str(exc)[:350]}"
       ) from exc
 
-    for local_id, registro in enumerate(lista_lote):
+    for local_id, (clave, registro_original) in enumerate(lote_pendiente):
       resultado = res_map.get(local_id)
       if resultado is None:
-        try:
-          resultado = clasificar_lote_con_ia(
-              [{**registro, "id": 0}], actor_nombre_target
-          ).get(0)
-        except Exception as exc:
-          errores.append(str(exc))
-          resultado = clasificar_respaldo_local(
-              registro.get("texto", ""), actor_nombre_target
-          )
-          fallos_respaldo += 1
-
-      resultados_finales[inicio + local_id] = resultado
+        resultado = clasificar_respaldo_local(
+            registro_original.get("texto", ""), actor_nombre_target
+        )
+      if resultado.get("origen") == "RESPALDO_LOCAL":
+        fallos_respaldo += 1
+      resultado_por_clave[clave] = resultado
+      cache_ia[prefijo_cache + "|" + clave] = resultado
 
     progreso.progress((l_idx + 1) / max(total_lotes, 1))
 
   progreso.empty()
   estado_progreso.empty()
 
-  limite_fallos = max(3, int(len(df_eval) * 0.10))
-  if fallos_respaldo > limite_fallos:
-    detalle = errores[0][:300] if errores else "Error desconocido de la API."
-    raise RuntimeError(
-        "Gemini no pudo analizar suficientes notas y el reporte se detuvo para"
-        " evitar resultados engañosos. Revisa la API key, el modelo y la cuota."
-        f" Detalle: {detalle}"
-    )
+  for fila_id, clave in enumerate(clave_por_fila):
+    resultados_finales[fila_id] = resultado_por_clave[clave]
 
   if fallos_respaldo:
     st.warning(
-        f"{fallos_respaldo} nota(s) no obtuvieron respuesta de Gemini y fueron"
+        f"{fallos_respaldo} texto(s) único(s) no obtuvieron respuesta de Gemini y fueron"
         " marcadas mediante un respaldo local conservador."
     )
 
