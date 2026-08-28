@@ -1,6 +1,6 @@
 streamlit
 pandas
-google-generativeai
-python-docx
 openpyxl
 xlrd
+python-docx
+google-genai
