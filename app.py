@@ -1312,6 +1312,49 @@ def obtener_link_inteligente(row):
   return ""
 
 
+def aplicar_verdana_12_documento(doc):
+  """Aplica Verdana 12 sin alterar negritas, colores, resaltados o enlaces."""
+  doc.styles["Normal"].font.name = "Verdana"
+  doc.styles["Normal"].font.size = Pt(12)
+
+  elementos = [doc._element]
+  for seccion in doc.sections:
+    elementos.extend([
+        seccion.header._element,
+        seccion.first_page_header._element,
+        seccion.even_page_header._element,
+        seccion.footer._element,
+        seccion.first_page_footer._element,
+        seccion.even_page_footer._element,
+    ])
+
+  vistos = set()
+  for elemento in elementos:
+    identidad = id(elemento)
+    if identidad in vistos:
+      continue
+    vistos.add(identidad)
+    for run_xml in elemento.iter(qn("w:r")):
+      rpr = run_xml.find(qn("w:rPr"))
+      if rpr is None:
+        rpr = OxmlElement("w:rPr")
+        run_xml.insert(0, rpr)
+
+      rfonts = rpr.find(qn("w:rFonts"))
+      if rfonts is None:
+        rfonts = OxmlElement("w:rFonts")
+        rpr.insert(0, rfonts)
+      for atributo in ("ascii", "hAnsi", "eastAsia", "cs"):
+        rfonts.set(qn(f"w:{atributo}"), "Verdana")
+
+      for etiqueta in ("w:sz", "w:szCs"):
+        tamano = rpr.find(qn(etiqueta))
+        if tamano is None:
+          tamano = OxmlElement(etiqueta)
+          rpr.append(tamano)
+        tamano.set(qn("w:val"), "24")
+
+
 def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
   if df_hoja is None or df_hoja.empty:
     return None
@@ -1933,6 +1976,7 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
                 )
 
   buffer = io.BytesIO()
+  aplicar_verdana_12_documento(doc)
   doc.save(buffer)
   buffer.seek(0)
   return buffer
@@ -1940,8 +1984,8 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
 
 # ==============================================================================
 # UNIFICACIÓN DE REPORTES WORD
-# Usa el segundo archivo (Redes Sociales) como plantilla visual y combina en él
-# las cifras, los temas y el desglose del reporte de medios tradicionales.
+# Usa el primer archivo (medios tradicionales) como plantilla visual y combina
+# en él las publicaciones del reporte de redes sociales.
 # ==============================================================================
 
 PATRON_FECHA_REPORTE = re.compile(
@@ -2689,10 +2733,12 @@ def _reconstruir_desglose_unificado(
   posicion = list(cuerpo).index(sect_pr) if sect_pr is not None else len(cuerpo)
 
   for fecha in fechas:
+    bloque_trad_original = bloques_tradicionales.get(fecha, [])
+    bloque_redes_original = bloques_redes.get(fecha, [])
     analisis_trad = _analizar_bloque_fecha(
-        bloques_tradicionales.get(fecha, [])
+        bloque_trad_original
     )
-    analisis_redes = _analizar_bloque_fecha(bloques_redes.get(fecha, []))
+    analisis_redes = _analizar_bloque_fecha(bloque_redes_original)
     total_info = (
         analisis_trad["total_informativos"]
         + analisis_redes["total_informativos"]
@@ -2702,7 +2748,20 @@ def _reconstruir_desglose_unificado(
         + analisis_redes["total_negativos"]
     )
 
-    cuerpo.insert(posicion, _clonar_parrafo_con_texto(modelo_fecha, fecha))
+    # Si la fecha ya aparece en tradicionales se conserva exactamente como fue
+    # escrita allí (incluido año de dos o cuatro dígitos).
+    nodo_fecha_origen = (
+        bloque_trad_original[0]
+        if bloque_trad_original
+        else bloque_redes_original[0]
+    )
+    fecha_visible = _texto_normalizado_docx(
+        _texto_elemento_docx(nodo_fecha_origen)
+    )
+    cuerpo.insert(
+        posicion,
+        _clonar_parrafo_con_texto(modelo_fecha, fecha_visible),
+    )
     posicion += 1
     cuerpo.insert(
         posicion,
@@ -2867,7 +2926,8 @@ def unificar_reportes_word(archivo_tradicional, archivo_redes):
 
   El archivo tradicional es la plantilla visual: conserva sus estilos, tamaño
   de página, márgenes, encabezados, pies, tabla, colores e imágenes. Del archivo
-  de redes se incorporan cifras y publicaciones; las fechas se ordenan.
+  de redes se incorporan cifras y publicaciones. El periodo y los encabezados
+  de fecha del archivo tradicional se conservan sin cambios.
   """
   doc_base = _abrir_docx_desde_streamlit(archivo_tradicional)
   doc_redes = _abrir_docx_desde_streamlit(archivo_redes)
@@ -2913,9 +2973,8 @@ def unificar_reportes_word(archivo_tradicional, archivo_redes):
       metricas["total"],
   )
   _actualizar_totales_unificados(doc_base, metricas)
-  _actualizar_periodo_desde_fechas(
-      doc_base, set(bloques_tradicionales) | set(bloques_redes)
-  )
+  # El periodo de medición de la portada pertenece a la plantilla tradicional
+  # y no se reemplaza con el rango combinado.
   # Los temas editoriales de la plantilla se conservan sin remaquetarlos.
   _reconstruir_desglose_unificado(
       doc_base,
@@ -2925,6 +2984,7 @@ def unificar_reportes_word(archivo_tradicional, archivo_redes):
   )
 
   salida = io.BytesIO()
+  aplicar_verdana_12_documento(doc_base)
   doc_base.save(salida)
   salida.seek(0)
   return salida
@@ -3129,7 +3189,8 @@ else:
       " conservar su formato, estilos, colores, tabla, imágenes, encabezados y"
       " pies de página. El desglose incluirá los totales informativos y"
       " negativos de cada día. Las fechas de ambos archivos se unirán aunque"
-      " no coincidan entre sí."
+      " no coincidan entre sí, pero el periodo y las fechas del primer archivo"
+      " no se modificarán. Todo el documento se generará en Verdana 12."
   )
 
   col_trad, col_redes = st.columns(2)
