@@ -2047,6 +2047,15 @@ def _leer_balance_docx(doc):
   return None, None, None
 
 
+PATRON_ETIQUETA_CANAL = re.compile(
+    r"(ENTREVISTAS?|TELEVISI[ÓO]N|TV|RADIO|PRENSA(?:\s+LOCAL)?|"
+    r"PORTALES?(?:\s+(?:DIGITALES?|LOCALES?))?|LOCALES?|COLUMNAS?|"
+    r"REDES(?:\s+SOCIALES)?)"
+    r"(?:\s+(INFORMATIVAS?|NEGATIVAS?))?\s*:",
+    re.IGNORECASE,
+)
+
+
 def _canal_unificado(etiqueta):
   limpio = quitar_acentos(etiqueta).upper()
   if limpio.startswith("ENTREVISTA"):
@@ -2057,13 +2066,56 @@ def _canal_unificado(etiqueta):
     return "RADIO"
   if limpio.startswith("PRENSA"):
     return "PRENSA LOCAL"
-  if limpio.startswith("PORTAL"):
+  if limpio.startswith("PORTAL") or limpio in {"LOCAL", "LOCALES"}:
     return "PORTALES DIGITALES"
   if limpio.startswith("COLUMNA"):
     return "COLUMNAS"
-  if limpio.startswith("REDES SOCIALES"):
+  if limpio.startswith("REDES"):
     return "REDES SOCIALES"
   return None
+
+
+def _extraer_conteos_canales(texto):
+  """
+  Lee uno o varios encabezados dentro del mismo párrafo.
+
+  Admite, entre otras variantes: PORTALES DIGITALES, PORTALES LOCALES,
+  LOCALES, REDES y REDES SOCIALES. También resuelve párrafos concatenados como
+  «COLUMNAS: PORTALES LOCALES: 178» sin atribuir 178 a COLUMNAS.
+  """
+  texto = str(texto or "").replace("\xa0", " ")
+  coincidencias = list(PATRON_ETIQUETA_CANAL.finditer(texto))
+  if not coincidencias:
+    return []
+
+  # Solo se consideran encabezados que comienzan el párrafo. Así una mención
+  # casual a «redes sociales:» dentro del cuerpo de una nota no se contabiliza.
+  prefijo = texto[:coincidencias[0].start()]
+  if re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ0-9]", prefijo):
+    return []
+
+  resultados = []
+  for indice, coincidencia in enumerate(coincidencias):
+    fin = (
+        coincidencias[indice + 1].start()
+        if indice + 1 < len(coincidencias)
+        else len(texto)
+    )
+    segmento = texto[coincidencia.end():fin]
+    valor = re.match(r"\s*\(?\s*(\d[\d,.]*)", segmento)
+    cantidad = None
+    if valor:
+      solo_digitos = re.sub(r"\D", "", valor.group(1))
+      if solo_digitos:
+        cantidad = int(solo_digitos)
+    resultados.append({
+        "canal": _canal_unificado(coincidencia.group(1)),
+        "modificador": quitar_acentos(
+            coincidencia.group(2) or ""
+        ).upper(),
+        "cantidad": cantidad,
+    })
+  return resultados
 
 
 def _buscar_indice_desglose(doc):
@@ -2082,22 +2134,14 @@ def _contar_canales_en_desglose(doc):
     return positivos, negativos
 
   sentimiento_actual = "POSITIVA"
-  patron_canal = re.compile(
-      r"^\s*(ENTREVISTAS?|TELEVISI[ÓO]N|TV|RADIO|PRENSA(?:\s+LOCAL)?|"
-      r"PORTALES?(?:\s+(?:DIGITALES|LOCALES))?|COLUMNAS?|REDES\s+SOCIALES)"
-      r"(?:\s+(INFORMATIVAS?|NEGATIVAS?))?"
-      r"(?:\s*:\s*\(?\s*|\s+\(\s*)(\d+)",
-      re.IGNORECASE,
-  )
-
   for parrafo in doc.paragraphs[indice_desglose + 1:]:
     texto = str(parrafo.text or "").strip()
     if not texto:
       continue
-    primera_linea = texto.splitlines()[0].strip()
-    texto_mayus = quitar_acentos(primera_linea).upper()
+    texto_plano = _texto_normalizado_docx(texto)
+    texto_mayus = quitar_acentos(texto_plano).upper()
 
-    if PATRON_FECHA_REPORTE.match(primera_linea):
+    if PATRON_FECHA_REPORTE.match(texto_plano):
       sentimiento_actual = "POSITIVA"
       continue
     if texto_mayus.startswith("TOTAL DE IMPACTOS INFORMATIVOS"):
@@ -2111,21 +2155,21 @@ def _contar_canales_en_desglose(doc):
       sentimiento_actual = "NEGATIVA"
       continue
 
-    coincidencia = patron_canal.match(primera_linea)
-    if not coincidencia:
+    conteos = _extraer_conteos_canales(texto_plano)
+    if not conteos:
       continue
-    canal = _canal_unificado(coincidencia.group(1))
-    if not canal:
-      continue
-    modificador = quitar_acentos(coincidencia.group(2) or "").upper()
-    cantidad = int(coincidencia.group(3))
-    sentimiento = sentimiento_actual
-    if modificador.startswith("NEGATIVA"):
-      sentimiento = "NEGATIVA"
-    elif modificador.startswith("INFORMATIVA"):
-      sentimiento = "POSITIVA"
-    destino = negativos if sentimiento == "NEGATIVA" else positivos
-    destino[canal] += cantidad
+    for conteo in conteos:
+      canal = conteo["canal"]
+      cantidad = conteo["cantidad"]
+      if not canal or cantidad is None:
+        continue
+      sentimiento = sentimiento_actual
+      if conteo["modificador"].startswith("NEGATIVA"):
+        sentimiento = "NEGATIVA"
+      elif conteo["modificador"].startswith("INFORMATIVA"):
+        sentimiento = "POSITIVA"
+      destino = negativos if sentimiento == "NEGATIVA" else positivos
+      destino[canal] += cantidad
 
   return positivos, negativos
 
@@ -2138,17 +2182,11 @@ def _leer_totales_canales_superiores(doc):
     if _texto_normalizado_docx(texto).upper() == "RESUMEN":
       break
     for linea in texto.splitlines():
-      coincidencia = re.match(
-          r"^\s*(ENTREVISTAS?|TELEVISI[ÓO]N|TV|RADIO|PRENSA(?:\s+LOCAL)?|"
-          r"PORTALES?(?:\s+(?:DIGITALES|LOCALES))?|COLUMNAS?|REDES\s+SOCIALES)"
-          r"(?:\s+(?:INFORMATIVAS?|NEGATIVAS?))?\s*:\s*\(?\s*(\d+)",
-          linea,
-          re.IGNORECASE,
-      )
-      if coincidencia:
-        canal = _canal_unificado(coincidencia.group(1))
-        if canal:
-          totales[canal] += int(coincidencia.group(2))
+      for conteo in _extraer_conteos_canales(linea):
+        canal = conteo["canal"]
+        cantidad = conteo["cantidad"]
+        if canal and cantidad is not None:
+          totales[canal] += cantidad
   return totales
 
 
@@ -2164,25 +2202,19 @@ def _obtener_metricas_docx(doc, es_reporte_redes=False):
 
   if es_reporte_redes:
     if positiva_balance is not None:
-      positivos["REDES SOCIALES"] = positiva_balance
+      positivos["REDES SOCIALES"] = max(
+          positivos["REDES SOCIALES"], positiva_balance
+      )
     if negativa_balance is not None:
-      negativos["REDES SOCIALES"] = negativa_balance
+      negativos["REDES SOCIALES"] = max(
+          negativos["REDES SOCIALES"], negativa_balance
+      )
 
-  positiva = (
-      positiva_balance
-      if positiva_balance is not None
-      else sum(positivos.values())
-  )
-  negativa = (
-      negativa_balance
-      if negativa_balance is not None
-      else sum(negativos.values())
-  )
-  total = (
-      total_balance
-      if total_balance is not None
-      else positiva + negativa
-  )
+  positiva_calculada = sum(positivos.values())
+  negativa_calculada = sum(negativos.values())
+  positiva = max(positiva_balance or 0, positiva_calculada)
+  negativa = max(negativa_balance or 0, negativa_calculada)
+  total = positiva + negativa
   return {
       "positiva": int(positiva),
       "negativa": int(negativa),
@@ -2494,15 +2526,6 @@ def _texto_elemento_docx(elemento):
   ).strip()
 
 
-PATRON_CANAL_BLOQUE = re.compile(
-    r"^\s*(ENTREVISTAS?|TELEVISI[ÓO]N|TV|RADIO|PRENSA(?:\s+LOCAL)?|"
-    r"PORTALES?(?:\s+(?:DIGITALES|LOCALES))?|COLUMNAS?|REDES\s+SOCIALES)"
-    r"(?:\s+(INFORMATIVAS?|NEGATIVAS?))?"
-    r"(?:\s*:\s*\(?\s*|\s+\(\s*)(\d+)",
-    re.IGNORECASE,
-)
-
-
 def _analizar_bloque_fecha(bloque):
   """Separa un día en nodos informativos/negativos y calcula sus cifras."""
   resultado = {
@@ -2543,23 +2566,27 @@ def _analizar_bloque_fecha(bloque):
         total_neg_explicito = valor
       continue
 
-    coincidencia = PATRON_CANAL_BLOQUE.match(texto)
-    if coincidencia:
-      canal = _canal_unificado(coincidencia.group(1))
-      modificador = quitar_acentos(coincidencia.group(2) or "").upper()
-      if modificador.startswith("NEGATIVA"):
-        estado_nodo = "NEGATIVA"
-      elif modificador.startswith("INFORMATIVA"):
-        estado_nodo = "POSITIVA"
-      else:
-        estado_nodo = estado
-      if canal:
-        clave = (
-            "canales_negativos"
-            if estado_nodo == "NEGATIVA"
-            else "canales_informativos"
-        )
-        resultado[clave][canal] += int(coincidencia.group(3))
+    conteos = _extraer_conteos_canales(texto)
+    if conteos:
+      estado_nodo = estado
+      for conteo in conteos:
+        modificador = conteo["modificador"]
+        if modificador.startswith("NEGATIVA"):
+          sentimiento_conteo = "NEGATIVA"
+        elif modificador.startswith("INFORMATIVA"):
+          sentimiento_conteo = "POSITIVA"
+        else:
+          sentimiento_conteo = estado
+        estado_nodo = sentimiento_conteo
+        canal = conteo["canal"]
+        cantidad = conteo["cantidad"]
+        if canal and cantidad is not None:
+          clave = (
+              "canales_negativos"
+              if sentimiento_conteo == "NEGATIVA"
+              else "canales_informativos"
+          )
+          resultado[clave][canal] += cantidad
       destino = (
           resultado["negativos"]
           if estado_nodo == "NEGATIVA"
@@ -2574,21 +2601,139 @@ def _analizar_bloque_fecha(bloque):
 
   calculado_info = sum(resultado["canales_informativos"].values())
   calculado_neg = sum(resultado["canales_negativos"].values())
-  resultado["total_informativos"] = (
-      total_info_explicito
-      if total_info_explicito is not None
-      else calculado_info
+  resultado["total_informativos"] = max(
+      total_info_explicito or 0, calculado_info
   )
-  resultado["total_negativos"] = (
-      total_neg_explicito
-      if total_neg_explicito is not None
-      else calculado_neg
+  resultado["total_negativos"] = max(
+      total_neg_explicito or 0, calculado_neg
   )
   return resultado
 
 
 def _es_encabezado_canal_elemento(nodo):
-  return bool(PATRON_CANAL_BLOQUE.match(_texto_elemento_docx(nodo)))
+  return bool(_extraer_conteos_canales(_texto_elemento_docx(nodo)))
+
+
+def _rpr_tema_modelo(parrafo_modelo, negrita):
+  candidato = None
+  for run_xml in parrafo_modelo._p.findall(qn("w:r")):
+    rpr = run_xml.find(qn("w:rPr"))
+    if rpr is None:
+      continue
+    es_negrita = rpr.find(qn("w:b")) is not None
+    if es_negrita == negrita:
+      return deepcopy(rpr)
+    if candidato is None:
+      candidato = deepcopy(rpr)
+
+  rpr = candidato or OxmlElement("w:rPr")
+  for etiqueta in ("w:b", "w:bCs"):
+    nodo = rpr.find(qn(etiqueta))
+    if negrita and nodo is None:
+      nodo = OxmlElement(etiqueta)
+      nodo.set(qn("w:val"), "1")
+      rpr.append(nodo)
+    elif not negrita and nodo is not None:
+      rpr.remove(nodo)
+  return rpr
+
+
+def _establecer_tema_en_elemento(p_xml, texto, parrafo_modelo):
+  """Escribe un tema con su encabezado en negritas y explicación normal."""
+  for hijo in list(p_xml):
+    if hijo.tag != qn("w:pPr"):
+      p_xml.remove(hijo)
+
+  coincidencia = re.match(r"^(.*?:)(\s*)(.*)$", texto.strip())
+  if coincidencia:
+    titulo = coincidencia.group(1)
+    separador = coincidencia.group(2) or " "
+    cuerpo = coincidencia.group(3)
+  else:
+    titulo, separador, cuerpo = texto.strip(), "", ""
+
+  for contenido, negrita in [
+      (titulo + separador, True),
+      (cuerpo, False),
+  ]:
+    if not contenido:
+      continue
+    run_xml = OxmlElement("w:r")
+    run_xml.append(_rpr_tema_modelo(parrafo_modelo, negrita))
+    texto_xml = OxmlElement("w:t")
+    texto_xml.set(qn("xml:space"), "preserve")
+    texto_xml.text = contenido
+    run_xml.append(texto_xml)
+    p_xml.append(run_xml)
+
+
+def _reconstruir_resumen_negativo_unificado(doc_base, doc_redes):
+  """Integra en la plantilla los temas negativos de ambos reportes."""
+  _, negativos_base = _extraer_temas_docx(doc_base)
+  _, negativos_redes = _extraer_temas_docx(doc_redes)
+  negativos = _deduplicar_temas(negativos_base + negativos_redes)
+  if not negativos:
+    negativos = [
+        "Sin incidencias negativas: No se registraron temas negativos en el"
+        " periodo analizado."
+    ]
+
+  parrafos = doc_base.paragraphs
+  indice_info = next(
+      (
+          i for i, p in enumerate(parrafos)
+          if quitar_acentos(_texto_normalizado_docx(p.text)).upper()
+          == "TEMAS RELEVANTES INFORMATIVOS"
+      ),
+      None,
+  )
+  indice_neg = next(
+      (
+          i for i, p in enumerate(parrafos)
+          if quitar_acentos(_texto_normalizado_docx(p.text)).upper()
+          == "TEMAS NEGATIVOS"
+      ),
+      None,
+  )
+  indice_desglose = _buscar_indice_desglose(doc_base)
+  if None in (indice_info, indice_neg, indice_desglose):
+    raise ValueError(
+        "La plantilla no contiene las secciones de resumen necesarias."
+    )
+
+  modelo_tema = next(
+      (
+          p for p in parrafos[indice_neg + 1:indice_desglose]
+          if _texto_normalizado_docx(p.text)
+      ),
+      None,
+  )
+  if modelo_tema is None:
+    modelo_tema = next(
+        (
+            p for p in parrafos[indice_info + 1:indice_neg]
+            if _texto_normalizado_docx(p.text)
+        ),
+        parrafos[indice_neg],
+    )
+
+  espacios = parrafos[indice_neg + 1:indice_desglose]
+  for numero, tema in enumerate(negativos, 1):
+    texto_tema = f"{numero}. {tema}"
+    if numero <= len(espacios):
+      _establecer_tema_en_elemento(
+          espacios[numero - 1]._p, texto_tema, modelo_tema
+      )
+      continue
+    clon = deepcopy(modelo_tema._p)
+    _establecer_tema_en_elemento(clon, texto_tema, modelo_tema)
+    parrafos[indice_desglose]._p.addprevious(clon)
+
+  # Si la plantilla ya tenía más temas, se limpian los sobrantes sin eliminar
+  # los párrafos de reserva que sostienen su distribución visual.
+  for parrafo in espacios[len(negativos):]:
+    if _texto_normalizado_docx(parrafo.text):
+      _reemplazar_texto_con_formato(parrafo, "")
 
 
 def _reconstruir_resumen_unificado(doc_base, doc_tradicional):
@@ -2700,7 +2845,7 @@ def _reconstruir_desglose_unificado(
   modelo_canal = next(
       (
           p for p in parrafos[indice_desglose + 1:]
-          if PATRON_CANAL_BLOQUE.match(_texto_normalizado_docx(p.text))
+          if _extraer_conteos_canales(_texto_normalizado_docx(p.text))
       ),
       None,
   )
@@ -2975,7 +3120,7 @@ def unificar_reportes_word(archivo_tradicional, archivo_redes):
   _actualizar_totales_unificados(doc_base, metricas)
   # El periodo de medición de la portada pertenece a la plantilla tradicional
   # y no se reemplaza con el rango combinado.
-  # Los temas editoriales de la plantilla se conservan sin remaquetarlos.
+  _reconstruir_resumen_negativo_unificado(doc_base, doc_redes)
   _reconstruir_desglose_unificado(
       doc_base,
       doc_redes,
