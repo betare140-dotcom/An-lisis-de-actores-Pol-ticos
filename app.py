@@ -1,4 +1,5 @@
 from datetime import datetime
+from copy import deepcopy
 import io
 import json
 import os
@@ -10,7 +11,8 @@ from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import parse_xml
-from docx.oxml.ns import nsdecls
+from docx.oxml import OxmlElement
+from docx.oxml.ns import nsdecls, qn
 from docx.shared import Inches, Pt, RGBColor
 from google import genai
 import pandas as pd
@@ -1844,6 +1846,687 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
   return buffer
 
 
+# ==============================================================================
+# UNIFICACIÓN DE REPORTES WORD
+# Usa el segundo archivo (Redes Sociales) como plantilla visual y combina en él
+# las cifras, los temas y el desglose del reporte de medios tradicionales.
+# ==============================================================================
+
+PATRON_FECHA_REPORTE = re.compile(r"^\s*(\d{2})\.(\d{2})\.(\d{2})\s*$")
+ORDEN_CANALES_UNIFICADOS = [
+    "ENTREVISTAS",
+    "TELEVISIÓN",
+    "RADIO",
+    "PRENSA LOCAL",
+    "PORTALES DIGITALES",
+    "COLUMNAS",
+    "REDES SOCIALES",
+]
+
+
+def _abrir_docx_desde_streamlit(archivo):
+  """Abre bytes, BytesIO o UploadedFile sin depender de su posición actual."""
+  if archivo is None:
+    raise ValueError("Falta uno de los archivos Word.")
+  if isinstance(archivo, (bytes, bytearray)):
+    contenido = bytes(archivo)
+  elif hasattr(archivo, "getvalue"):
+    contenido = archivo.getvalue()
+  else:
+    posicion = archivo.tell() if hasattr(archivo, "tell") else None
+    contenido = archivo.read()
+    if posicion is not None and hasattr(archivo, "seek"):
+      archivo.seek(posicion)
+  if not contenido:
+    raise ValueError("Uno de los archivos Word está vacío.")
+  return Document(io.BytesIO(contenido))
+
+
+def _texto_normalizado_docx(texto):
+  return " ".join(str(texto or "").replace("\xa0", " ").split())
+
+
+def _extraer_entero_docx(texto):
+  coincidencia = re.search(r"\d[\d,.]*", str(texto or ""))
+  if not coincidencia:
+    return None
+  solo_digitos = re.sub(r"\D", "", coincidencia.group(0))
+  return int(solo_digitos) if solo_digitos else None
+
+
+def _leer_balance_docx(doc):
+  """Devuelve positiva, negativa y total desde la tabla de balance."""
+  for tabla in doc.tables:
+    for indice, fila in enumerate(tabla.rows[:-1]):
+      celdas = [_texto_normalizado_docx(c.text).upper() for c in fila.cells]
+      encabezado = " | ".join(celdas)
+      if "POSITIVA" not in encabezado or "NEGATIVA" not in encabezado:
+        continue
+      fila_valores = tabla.rows[indice + 1]
+      valores = [_extraer_entero_docx(c.text) for c in fila_valores.cells[:3]]
+      if len(valores) >= 3 and all(v is not None for v in valores):
+        return valores[0], valores[1], valores[2]
+  return None, None, None
+
+
+def _canal_unificado(etiqueta):
+  limpio = quitar_acentos(etiqueta).upper()
+  if limpio.startswith("ENTREVISTA"):
+    return "ENTREVISTAS"
+  if limpio.startswith("TV") or limpio.startswith("TELEVISION"):
+    return "TELEVISIÓN"
+  if limpio.startswith("RADIO"):
+    return "RADIO"
+  if limpio.startswith("PRENSA"):
+    return "PRENSA LOCAL"
+  if limpio.startswith("PORTAL"):
+    return "PORTALES DIGITALES"
+  if limpio.startswith("COLUMNA"):
+    return "COLUMNAS"
+  if limpio.startswith("REDES SOCIALES"):
+    return "REDES SOCIALES"
+  return None
+
+
+def _buscar_indice_desglose(doc):
+  for indice, parrafo in enumerate(doc.paragraphs):
+    if _texto_normalizado_docx(parrafo.text).upper() == "DESGLOSE":
+      return indice
+  return None
+
+
+def _contar_canales_en_desglose(doc):
+  """Obtiene conteos por canal y sentimiento a partir de cada bloque diario."""
+  positivos = {canal: 0 for canal in ORDEN_CANALES_UNIFICADOS}
+  negativos = {canal: 0 for canal in ORDEN_CANALES_UNIFICADOS}
+  indice_desglose = _buscar_indice_desglose(doc)
+  if indice_desglose is None:
+    return positivos, negativos
+
+  sentimiento_actual = "POSITIVA"
+  patron_canal = re.compile(
+      r"^\s*(ENTREVISTAS?|TELEVISI[ÓO]N|TV|RADIO|PRENSA(?:\s+LOCAL)?|"
+      r"PORTALES?(?:\s+(?:DIGITALES|LOCALES))?|COLUMNAS?|REDES\s+SOCIALES)"
+      r"(?:\s+(INFORMATIVAS?|NEGATIVAS?))?"
+      r"(?:\s*:\s*\(?\s*|\s+\(\s*)(\d+)",
+      re.IGNORECASE,
+  )
+
+  for parrafo in doc.paragraphs[indice_desglose + 1:]:
+    texto = str(parrafo.text or "").strip()
+    if not texto:
+      continue
+    primera_linea = texto.splitlines()[0].strip()
+    texto_mayus = quitar_acentos(primera_linea).upper()
+
+    if PATRON_FECHA_REPORTE.match(primera_linea):
+      sentimiento_actual = "POSITIVA"
+      continue
+    if texto_mayus.startswith("TOTAL DE IMPACTOS INFORMATIVOS"):
+      sentimiento_actual = "POSITIVA"
+      continue
+    if (
+        texto_mayus.startswith("TOTAL DE IMPACTOS NEGATIVOS")
+        or texto_mayus.startswith("TOTAL NOTAS NEGATIVAS")
+        or texto_mayus.startswith("NEGATIVAS:")
+    ):
+      sentimiento_actual = "NEGATIVA"
+      continue
+
+    coincidencia = patron_canal.match(primera_linea)
+    if not coincidencia:
+      continue
+    canal = _canal_unificado(coincidencia.group(1))
+    if not canal:
+      continue
+    modificador = quitar_acentos(coincidencia.group(2) or "").upper()
+    cantidad = int(coincidencia.group(3))
+    sentimiento = sentimiento_actual
+    if modificador.startswith("NEGATIVA"):
+      sentimiento = "NEGATIVA"
+    elif modificador.startswith("INFORMATIVA"):
+      sentimiento = "POSITIVA"
+    destino = negativos if sentimiento == "NEGATIVA" else positivos
+    destino[canal] += cantidad
+
+  return positivos, negativos
+
+
+def _leer_totales_canales_superiores(doc):
+  """Lee los totales generales por canal ubicados antes de RESUMEN."""
+  totales = {canal: 0 for canal in ORDEN_CANALES_UNIFICADOS}
+  for parrafo in doc.paragraphs:
+    texto = str(parrafo.text or "")
+    if _texto_normalizado_docx(texto).upper() == "RESUMEN":
+      break
+    for linea in texto.splitlines():
+      coincidencia = re.match(
+          r"^\s*(ENTREVISTAS?|TELEVISI[ÓO]N|TV|RADIO|PRENSA(?:\s+LOCAL)?|"
+          r"PORTALES?(?:\s+(?:DIGITALES|LOCALES))?|COLUMNAS?|REDES\s+SOCIALES)"
+          r"(?:\s+(?:INFORMATIVAS?|NEGATIVAS?))?\s*:\s*\(?\s*(\d+)",
+          linea,
+          re.IGNORECASE,
+      )
+      if coincidencia:
+        canal = _canal_unificado(coincidencia.group(1))
+        if canal:
+          totales[canal] += int(coincidencia.group(2))
+  return totales
+
+
+def _obtener_metricas_docx(doc, es_reporte_redes=False):
+  positivos, negativos = _contar_canales_en_desglose(doc)
+  positiva_balance, negativa_balance, total_balance = _leer_balance_docx(doc)
+  totales_superiores = _leer_totales_canales_superiores(doc)
+
+  for canal, total_canal in totales_superiores.items():
+    conocido = positivos[canal] + negativos[canal]
+    if total_canal > conocido:
+      positivos[canal] += total_canal - conocido
+
+  if es_reporte_redes:
+    if positiva_balance is not None:
+      positivos["REDES SOCIALES"] = positiva_balance
+    if negativa_balance is not None:
+      negativos["REDES SOCIALES"] = negativa_balance
+
+  positiva = (
+      positiva_balance
+      if positiva_balance is not None
+      else sum(positivos.values())
+  )
+  negativa = (
+      negativa_balance
+      if negativa_balance is not None
+      else sum(negativos.values())
+  )
+  total = (
+      total_balance
+      if total_balance is not None
+      else positiva + negativa
+  )
+  return {
+      "positiva": int(positiva),
+      "negativa": int(negativa),
+      "total": int(total),
+      "positivos_canal": positivos,
+      "negativos_canal": negativos,
+  }
+
+
+def _extraer_bloques_por_fecha(doc):
+  """Conserva cada párrafo del desglose con su formato OOXML original."""
+  indice_desglose = _buscar_indice_desglose(doc)
+  if indice_desglose is None:
+    raise ValueError("El archivo no contiene la sección DESGLOSE.")
+
+  bloques = {}
+  fecha_actual = None
+  for parrafo in doc.paragraphs[indice_desglose + 1:]:
+    texto = _texto_normalizado_docx(parrafo.text)
+    coincidencia = PATRON_FECHA_REPORTE.match(texto)
+    if coincidencia:
+      fecha_actual = texto
+      bloques.setdefault(fecha_actual, []).append(parrafo._p)
+    elif fecha_actual is not None:
+      bloques[fecha_actual].append(parrafo._p)
+  return bloques
+
+
+def _fecha_desde_etiqueta(etiqueta):
+  coincidencia = PATRON_FECHA_REPORTE.match(etiqueta)
+  if not coincidencia:
+    return datetime.max
+  dia, mes, anio = map(int, coincidencia.groups())
+  return datetime(2000 + anio, mes, dia)
+
+
+def _extraer_temas_docx(doc):
+  informativos = []
+  negativos = []
+  estado = None
+  for parrafo in doc.paragraphs:
+    texto = _texto_normalizado_docx(parrafo.text)
+    texto_norm = quitar_acentos(texto).upper()
+    if texto_norm == "TEMAS RELEVANTES INFORMATIVOS":
+      estado = "INFORMATIVOS"
+      continue
+    if texto_norm == "TEMAS NEGATIVOS":
+      estado = "NEGATIVOS"
+      continue
+    if texto_norm == "DESGLOSE":
+      break
+    if not texto or estado is None:
+      continue
+    tema = re.sub(r"^\s*(?:[•\-]|\d+[.)])\s*", "", texto).strip()
+    if not tema:
+      continue
+    (informativos if estado == "INFORMATIVOS" else negativos).append(tema)
+  return informativos, negativos
+
+
+def _deduplicar_temas(temas):
+  resultado = []
+  vistos = set()
+  for tema in temas:
+    clave = normalizar_cadena(tema)
+    if clave and clave not in vistos:
+      vistos.add(clave)
+      resultado.append(tema)
+  return resultado
+
+
+def _reemplazar_texto_con_formato(parrafo, nuevo_texto):
+  """Cambia el texto manteniendo el formato del primer run del párrafo."""
+  p_xml = parrafo._p
+  primer_rpr = None
+  for run in p_xml.findall(qn("w:r")):
+    rpr = run.find(qn("w:rPr"))
+    if rpr is not None:
+      primer_rpr = deepcopy(rpr)
+      break
+  for hijo in list(p_xml):
+    if hijo.tag != qn("w:pPr"):
+      p_xml.remove(hijo)
+  run_xml = OxmlElement("w:r")
+  if primer_rpr is not None:
+    run_xml.append(primer_rpr)
+  partes = str(nuevo_texto).split("\n")
+  for indice, parte in enumerate(partes):
+    if indice:
+      run_xml.append(OxmlElement("w:br"))
+    texto_xml = OxmlElement("w:t")
+    texto_xml.set(qn("xml:space"), "preserve")
+    texto_xml.text = parte
+    run_xml.append(texto_xml)
+  p_xml.append(run_xml)
+
+
+def _clonar_parrafo_con_texto(parrafo_modelo, texto):
+  clon = deepcopy(parrafo_modelo._p)
+  primer_rpr = None
+  for run in clon.findall(qn("w:r")):
+    rpr = run.find(qn("w:rPr"))
+    if rpr is not None:
+      primer_rpr = deepcopy(rpr)
+      break
+  for hijo in list(clon):
+    if hijo.tag != qn("w:pPr"):
+      clon.remove(hijo)
+  run_xml = OxmlElement("w:r")
+  if primer_rpr is not None:
+    run_xml.append(primer_rpr)
+  texto_xml = OxmlElement("w:t")
+  texto_xml.set(qn("xml:space"), "preserve")
+  texto_xml.text = texto
+  run_xml.append(texto_xml)
+  clon.append(run_xml)
+  return clon
+
+
+def _copiar_elemento_con_relaciones(elemento, doc_origen, doc_destino):
+  clon = deepcopy(elemento)
+  if doc_origen.part is doc_destino.part:
+    return clon
+
+  atributos_relacion = [qn("r:id"), qn("r:embed"), qn("r:link")]
+  relaciones_cache = {}
+  for nodo in clon.iter():
+    for atributo in atributos_relacion:
+      rel_id = nodo.get(atributo)
+      if not rel_id or rel_id not in doc_origen.part.rels:
+        continue
+      if rel_id not in relaciones_cache:
+        relacion = doc_origen.part.rels[rel_id]
+        if relacion.is_external:
+          nuevo_rel_id = doc_destino.part.relate_to(
+              relacion.target_ref,
+              relacion.reltype,
+              is_external=True,
+          )
+        else:
+          nuevo_rel_id = doc_destino.part.relate_to(
+              relacion.target_part,
+              relacion.reltype,
+          )
+        relaciones_cache[rel_id] = nuevo_rel_id
+      nodo.set(atributo, relaciones_cache[rel_id])
+
+  # La configuración de secciones siempre debe seguir siendo la del segundo
+  # archivo; por eso se retiran saltos de sección internos del archivo primero.
+  for ppr in clon.iter(qn("w:pPr")):
+    sect_pr = ppr.find(qn("w:sectPr"))
+    if sect_pr is not None:
+      ppr.remove(sect_pr)
+  return clon
+
+
+def _actualizar_periodo_desde_fechas(doc, fechas):
+  if not fechas:
+    return
+  fechas_dt = sorted(_fecha_desde_etiqueta(fecha) for fecha in fechas)
+  inicio, fin = fechas_dt[0], fechas_dt[-1]
+  if inicio.date() == fin.date():
+    periodo = f"{inicio.day:02d} de {MESES_ES[inicio.month]} de {inicio.year}"
+  elif inicio.month == fin.month and inicio.year == fin.year:
+    periodo = (
+        f"{inicio.day:02d} al {fin.day:02d} de {MESES_ES[fin.month]}"
+        f" de {fin.year}"
+    )
+  elif inicio.year == fin.year:
+    periodo = (
+        f"{inicio.day:02d} de {MESES_ES[inicio.month]} al {fin.day:02d} de"
+        f" {MESES_ES[fin.month]} de {fin.year}"
+    )
+  else:
+    periodo = (
+        f"{inicio.day:02d} de {MESES_ES[inicio.month]} de {inicio.year} al"
+        f" {fin.day:02d} de {MESES_ES[fin.month]} de {fin.year}"
+    )
+  for parrafo in doc.paragraphs:
+    if _texto_normalizado_docx(parrafo.text).upper().startswith(
+        "PERIODO DE MEDICIÓN:"
+    ):
+      _reemplazar_texto_con_formato(
+          parrafo, f"PERIODO DE MEDICIÓN: {periodo}"
+      )
+      break
+
+
+def _actualizar_balance_unificado(doc, positiva, negativa, total):
+  for tabla in doc.tables:
+    for indice, fila in enumerate(tabla.rows[:-1]):
+      encabezado = " | ".join(
+          _texto_normalizado_docx(c.text).upper() for c in fila.cells
+      )
+      if "POSITIVA" in encabezado and "NEGATIVA" in encabezado:
+        valores = [positiva, negativa, total]
+        for celda, valor in zip(tabla.rows[indice + 1].cells[:3], valores):
+          _reemplazar_texto_con_formato(celda.paragraphs[0], str(valor))
+        return
+  raise ValueError(
+      "El segundo archivo no contiene una tabla de BALANCE DE IMPACTOS válida."
+  )
+
+
+def _actualizar_totales_unificados(doc, metricas):
+  canales_totales = {
+      canal: metricas["positivos_canal"][canal]
+      + metricas["negativos_canal"][canal]
+      for canal in ORDEN_CANALES_UNIFICADOS
+  }
+  lineas = [
+      f"TOTAL NOTAS INFORMATIVAS: {metricas['positiva']}",
+      f"TOTAL NOTAS NEGATIVAS: {metricas['negativa']}",
+      f"TOTAL DE IMPACTOS: {metricas['total']}",
+      f"ENTREVISTAS: {canales_totales['ENTREVISTAS']}",
+      f"TV: {canales_totales['TELEVISIÓN']}",
+      f"RADIO: {canales_totales['RADIO']}",
+      f"PRENSA LOCAL: {canales_totales['PRENSA LOCAL']}",
+      f"PORTALES DIGITALES: {canales_totales['PORTALES DIGITALES']}",
+      f"COLUMNAS: {canales_totales['COLUMNAS']}",
+      f"REDES SOCIALES: {canales_totales['REDES SOCIALES']}",
+  ]
+  for parrafo in doc.paragraphs:
+    if "TOTAL NOTAS INFORMATIVAS:" in parrafo.text.upper():
+      _reemplazar_texto_con_formato(parrafo, "\n".join(lineas))
+      return
+  raise ValueError(
+      "El segundo archivo no contiene el bloque de totales del reporte."
+  )
+
+
+def _reconstruir_resumen_unificado(doc_base, doc_tradicional):
+  info_base, neg_base = _extraer_temas_docx(doc_base)
+  info_trad, neg_trad = _extraer_temas_docx(doc_tradicional)
+  informativos = _deduplicar_temas(info_base + info_trad)
+  negativos = _deduplicar_temas(neg_base + neg_trad)
+
+  parrafos = doc_base.paragraphs
+  indice_info = next(
+      (
+          i
+          for i, p in enumerate(parrafos)
+          if quitar_acentos(_texto_normalizado_docx(p.text)).upper()
+          == "TEMAS RELEVANTES INFORMATIVOS"
+      ),
+      None,
+  )
+  indice_neg = next(
+      (
+          i
+          for i, p in enumerate(parrafos)
+          if quitar_acentos(_texto_normalizado_docx(p.text)).upper()
+          == "TEMAS NEGATIVOS"
+      ),
+      None,
+  )
+  indice_desglose = _buscar_indice_desglose(doc_base)
+  if None in (indice_info, indice_neg, indice_desglose):
+    return
+
+  modelo_info = (
+      parrafos[indice_info + 1]
+      if indice_info + 1 < indice_neg
+      else parrafos[indice_info]
+  )
+  modelo_neg = (
+      parrafos[indice_neg + 1]
+      if indice_neg + 1 < indice_desglose
+      else modelo_info
+  )
+  nodo_info = parrafos[indice_info]._p
+  nodo_neg = parrafos[indice_neg]._p
+  nodo_desglose = parrafos[indice_desglose]._p
+  cuerpo = doc_base._body._element
+
+  elementos = list(cuerpo)
+  inicio = elementos.index(nodo_info)
+  fin = elementos.index(nodo_neg)
+  for elemento in elementos[inicio + 1:fin]:
+    cuerpo.remove(elemento)
+  posicion = list(cuerpo).index(nodo_neg)
+  for numero, tema in enumerate(informativos, 1):
+    cuerpo.insert(
+        posicion,
+        _clonar_parrafo_con_texto(modelo_info, f"{numero}. {tema}"),
+    )
+    posicion += 1
+
+  elementos = list(cuerpo)
+  inicio = elementos.index(nodo_neg)
+  fin = elementos.index(nodo_desglose)
+  for elemento in elementos[inicio + 1:fin]:
+    cuerpo.remove(elemento)
+  posicion = list(cuerpo).index(nodo_desglose)
+  if negativos:
+    for numero, tema in enumerate(negativos, 1):
+      cuerpo.insert(
+          posicion,
+          _clonar_parrafo_con_texto(modelo_neg, f"{numero}. {tema}"),
+      )
+      posicion += 1
+  else:
+    cuerpo.insert(
+        posicion,
+        _clonar_parrafo_con_texto(
+            modelo_neg, "No se registraron temas negativos en el periodo."
+        ),
+    )
+
+
+def _reconstruir_desglose_unificado(
+    doc_base,
+    doc_tradicional,
+    bloques_tradicionales,
+    bloques_redes,
+):
+  indice_desglose = _buscar_indice_desglose(doc_base)
+  if indice_desglose is None:
+    raise ValueError("El segundo archivo no contiene la sección DESGLOSE.")
+  nodo_desglose = doc_base.paragraphs[indice_desglose]._p
+  cuerpo = doc_base._body._element
+  elementos = list(cuerpo)
+  posicion_desglose = elementos.index(nodo_desglose)
+  for elemento in elementos[posicion_desglose + 1:]:
+    if elemento.tag != qn("w:sectPr"):
+      cuerpo.remove(elemento)
+
+  fechas = sorted(
+      set(bloques_tradicionales) | set(bloques_redes),
+      key=_fecha_desde_etiqueta,
+  )
+  sect_pr = cuerpo.sectPr
+  posicion = list(cuerpo).index(sect_pr) if sect_pr is not None else len(cuerpo)
+
+  for fecha in fechas:
+    bloque_redes = bloques_redes.get(fecha, [])
+    bloque_trad = bloques_tradicionales.get(fecha, [])
+    origen_fecha = doc_base if bloque_redes else doc_tradicional
+    nodo_fecha = (bloque_redes or bloque_trad)[0]
+    cuerpo.insert(
+        posicion,
+        _copiar_elemento_con_relaciones(nodo_fecha, origen_fecha, doc_base),
+    )
+    posicion += 1
+
+    # Orden institucional: medios tradicionales primero y redes al final.
+    for nodo in bloque_trad[1:]:
+      cuerpo.insert(
+          posicion,
+          _copiar_elemento_con_relaciones(
+              nodo, doc_tradicional, doc_base
+          ),
+      )
+      posicion += 1
+    for nodo in bloque_redes[1:]:
+      cuerpo.insert(
+          posicion,
+          _copiar_elemento_con_relaciones(nodo, doc_base, doc_base),
+      )
+      posicion += 1
+
+
+def _obtener_actor_reporte_docx(doc):
+  """Obtiene una etiqueta breve del actor para evitar mezclas accidentales."""
+  etiquetas_omitidas = (
+      "PERIODO DE MEDICIÓN:",
+      "CANALES:",
+      "BALANCE DE IMPACTOS",
+      "RESUMEN",
+  )
+  for parrafo in doc.paragraphs[:15]:
+    texto = _texto_normalizado_docx(parrafo.text)
+    if texto.upper() == "RESUMEN":
+      break
+    if texto and not texto.upper().startswith(etiquetas_omitidas):
+      return texto
+  for tabla in doc.tables:
+    for fila in tabla.rows[:2]:
+      for celda in fila.cells:
+        texto = _texto_normalizado_docx(celda.text)
+        texto_mayus = texto.upper()
+        if (
+            texto
+            and not texto_mayus.startswith(etiquetas_omitidas)
+            and "POSITIVA" not in texto_mayus
+            and "NEGATIVA" not in texto_mayus
+            and "TOTAL DE IMPACTOS" not in texto_mayus
+        ):
+          return texto
+  return ""
+
+
+def _actores_compatibles_docx(actor_uno, actor_dos):
+  ignorar = {
+      "MORENA", "PARTIDO", "CANDIDATO", "CANDIDATA", "REPORTE",
+      "PAN", "PRI", "PRD", "MOVIMIENTO", "CIUDADANO",
+  }
+  tokens_uno = {
+      t for t in re.findall(r"[A-Z]{4,}", quitar_acentos(actor_uno).upper())
+      if t not in ignorar
+  }
+  tokens_dos = {
+      t for t in re.findall(r"[A-Z]{4,}", quitar_acentos(actor_dos).upper())
+      if t not in ignorar
+  }
+  return not tokens_uno or not tokens_dos or bool(tokens_uno & tokens_dos)
+
+
+def unificar_reportes_word(archivo_tradicional, archivo_redes):
+  """
+  Genera un tercer Word unificado.
+
+  El archivo de redes sociales es la plantilla: conserva sus estilos, tamaño de
+  página, márgenes, encabezados, pies, tabla, colores e imágenes. Del archivo
+  tradicional se incorporan cifras, temas y desglose; las fechas se ordenan.
+  """
+  doc_tradicional = _abrir_docx_desde_streamlit(archivo_tradicional)
+  doc_base = _abrir_docx_desde_streamlit(archivo_redes)
+
+  actor_tradicional = _obtener_actor_reporte_docx(doc_tradicional)
+  actor_redes = _obtener_actor_reporte_docx(doc_base)
+  if not _actores_compatibles_docx(actor_tradicional, actor_redes):
+    raise ValueError(
+        "Los dos archivos parecen corresponder a actores políticos distintos."
+    )
+
+  bloques_tradicionales = _extraer_bloques_por_fecha(doc_tradicional)
+  bloques_redes = _extraer_bloques_por_fecha(doc_base)
+  if not bloques_tradicionales or not bloques_redes:
+    raise ValueError(
+        "Cada archivo debe contener la sección DESGLOSE con al menos una fecha."
+    )
+  if not (set(bloques_tradicionales) & set(bloques_redes)):
+    raise ValueError(
+        "Los reportes no comparten fechas; verifica que correspondan al mismo"
+        " periodo de medición."
+    )
+
+  metricas_trad = _obtener_metricas_docx(
+      doc_tradicional, es_reporte_redes=False
+  )
+  metricas_redes = _obtener_metricas_docx(doc_base, es_reporte_redes=True)
+  metricas = {
+      "positiva": metricas_trad["positiva"] + metricas_redes["positiva"],
+      "negativa": metricas_trad["negativa"] + metricas_redes["negativa"],
+  }
+  metricas["total"] = metricas["positiva"] + metricas["negativa"]
+  metricas["positivos_canal"] = {
+      canal: metricas_trad["positivos_canal"][canal]
+      + metricas_redes["positivos_canal"][canal]
+      for canal in ORDEN_CANALES_UNIFICADOS
+  }
+  metricas["negativos_canal"] = {
+      canal: metricas_trad["negativos_canal"][canal]
+      + metricas_redes["negativos_canal"][canal]
+      for canal in ORDEN_CANALES_UNIFICADOS
+  }
+
+  _actualizar_balance_unificado(
+      doc_base,
+      metricas["positiva"],
+      metricas["negativa"],
+      metricas["total"],
+  )
+  _actualizar_totales_unificados(doc_base, metricas)
+  _actualizar_periodo_desde_fechas(
+      doc_base, set(bloques_tradicionales) | set(bloques_redes)
+  )
+  _reconstruir_resumen_unificado(doc_base, doc_tradicional)
+  _reconstruir_desglose_unificado(
+      doc_base,
+      doc_tradicional,
+      bloques_tradicionales,
+      bloques_redes,
+  )
+
+  salida = io.BytesIO()
+  doc_base.save(salida)
+  salida.seek(0)
+  return salida
+
+
 # --- INTERFAZ STREAMLIT ---
 
 tipo_analisis = st.radio(
@@ -1851,6 +2534,7 @@ tipo_analisis = st.radio(
     [
         "Redes Sociales",
         "Medios Tradicionales / Portales / TV y Radio (Multi-Archivo)",
+        "Unificar reportes Word (Tradicionales + Redes Sociales)",
     ],
     index=0,
 )
@@ -1897,7 +2581,9 @@ if tipo_analisis == "Redes Sociales":
         except Exception as e:
           st.error(f"Error procesando el archivo: {str(e)}")
 
-else:
+elif tipo_analisis == (
+    "Medios Tradicionales / Portales / TV y Radio (Multi-Archivo)"
+):
   uploaded_files = st.file_uploader(
       "Sube uno o varios archivos Excel (ej. Archivo de TV/Radio y Archivo de"
       " Portales Web)",
@@ -2031,3 +2717,61 @@ else:
           "No se detectaron candidatos con notas válidas en los archivos"
           " seleccionados."
       )
+
+else:
+  st.subheader("🔗 Unificar dos reportes Word")
+  st.info(
+      "Sube primero el reporte de medios tradicionales y después el reporte de"
+      " redes sociales. El segundo archivo se utilizará como plantilla para"
+      " conservar su formato, estilos, colores, tabla, imágenes, encabezados y"
+      " pies de página."
+  )
+
+  col_trad, col_redes = st.columns(2)
+  with col_trad:
+    reporte_tradicional = st.file_uploader(
+        "1. Reporte Word de medios tradicionales",
+        type=["docx"],
+        key="reporte_tradicional_unificar",
+    )
+  with col_redes:
+    reporte_redes = st.file_uploader(
+        "2. Reporte Word de redes sociales (plantilla visual)",
+        type=["docx"],
+        key="reporte_redes_unificar",
+    )
+
+  if reporte_tradicional and reporte_redes:
+    if st.button(
+        "Generar tercer reporte unificado",
+        type="primary",
+        use_container_width=True,
+    ):
+      with st.spinner(
+          "Sumando cifras y ordenando tradicionales y redes por fecha..."
+      ):
+        try:
+          reporte_unificado = unificar_reportes_word(
+              reporte_tradicional, reporte_redes
+          )
+          st.session_state["reporte_word_unificado"] = (
+              reporte_unificado.getvalue()
+          )
+          st.success(
+              "El tercer reporte quedó unificado y conserva como base el"
+              " formato del archivo de redes sociales."
+          )
+        except Exception as e:
+          st.session_state.pop("reporte_word_unificado", None)
+          st.error(f"No fue posible unificar los reportes: {str(e)}")
+
+  if st.session_state.get("reporte_word_unificado"):
+    st.download_button(
+        label="📥 Descargar tercer reporte Word unificado",
+        data=st.session_state["reporte_word_unificado"],
+        file_name="Reporte_Unificado_Tradicionales_y_Redes.docx",
+        mime=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+        use_container_width=True,
+    )
