@@ -2201,14 +2201,13 @@ def _obtener_metricas_docx(doc, es_reporte_redes=False):
       positivos[canal] += total_canal - conocido
 
   if es_reporte_redes:
+    # En reportes de redes, el resumen superior puede mostrar el total del
+    # canal (informativas + negativas). La tabla de balance es la fuente que
+    # separa correctamente ambos sentimientos, por lo que debe prevalecer.
     if positiva_balance is not None:
-      positivos["REDES SOCIALES"] = max(
-          positivos["REDES SOCIALES"], positiva_balance
-      )
+      positivos["REDES SOCIALES"] = positiva_balance
     if negativa_balance is not None:
-      negativos["REDES SOCIALES"] = max(
-          negativos["REDES SOCIALES"], negativa_balance
-      )
+      negativos["REDES SOCIALES"] = negativa_balance
 
   positiva_calculada = sum(positivos.values())
   negativa_calculada = sum(negativos.values())
@@ -2256,25 +2255,47 @@ def _fecha_desde_etiqueta(etiqueta):
   return datetime(anio_completo, mes, dia)
 
 
+def _titulo_seccion_temas_docx(texto):
+  normalizado = quitar_acentos(
+      _texto_normalizado_docx(texto)
+  ).upper().rstrip(" :.-")
+  if normalizado in {
+      "TEMAS RELEVANTES INFORMATIVOS",
+      "TEMAS INFORMATIVOS",
+      "TEMAS POSITIVOS",
+      "TEMAS POSITIVOS E INFORMATIVOS",
+  }:
+    return "INFORMATIVOS"
+  if normalizado in {
+      "TEMAS NEGATIVOS",
+      "TEMAS RELEVANTES NEGATIVOS",
+      "TEMAS NEGATIVOS RELEVANTES",
+  }:
+    return "NEGATIVOS"
+  return None
+
+
 def _extraer_temas_docx(doc):
   informativos = []
   negativos = []
   estado = None
   for parrafo in doc.paragraphs:
     texto = _texto_normalizado_docx(parrafo.text)
-    texto_norm = quitar_acentos(texto).upper()
-    if texto_norm == "TEMAS RELEVANTES INFORMATIVOS":
-      estado = "INFORMATIVOS"
+    seccion = _titulo_seccion_temas_docx(texto)
+    if seccion:
+      estado = seccion
       continue
-    if texto_norm == "TEMAS NEGATIVOS":
-      estado = "NEGATIVOS"
-      continue
+    texto_norm = quitar_acentos(texto).upper().rstrip(" :.-")
     if texto_norm == "DESGLOSE":
       break
     if not texto or estado is None:
       continue
-    tema = re.sub(r"^\s*(?:[•\-]|\d+[.)])\s*", "", texto).strip()
-    if not tema:
+    tema = re.sub(
+        r"^\s*(?:[•\-]|\d+\s*(?:[.)]\s*-?|[-]))\s*",
+        "",
+        texto,
+    ).strip()
+    if not tema or not re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ0-9]", tema):
       continue
     (informativos if estado == "INFORMATIVOS" else negativos).append(tema)
   return informativos, negativos
@@ -2626,7 +2647,7 @@ def _rpr_tema_modelo(parrafo_modelo, negrita):
     if candidato is None:
       candidato = deepcopy(rpr)
 
-  rpr = candidato or OxmlElement("w:rPr")
+  rpr = candidato if candidato is not None else OxmlElement("w:rPr")
   for etiqueta in ("w:b", "w:bCs"):
     nodo = rpr.find(qn(etiqueta))
     if negrita and nodo is None:
@@ -2667,6 +2688,58 @@ def _establecer_tema_en_elemento(p_xml, texto, parrafo_modelo):
     p_xml.append(run_xml)
 
 
+def _rellenar_resumen_informativo_si_vacio(doc_base, doc_redes):
+  """Completa los campos 1.-, 2.-, 3.- cuando la plantilla no trae temas."""
+  informativos_base, _ = _extraer_temas_docx(doc_base)
+  if informativos_base:
+    return
+  informativos_redes, _ = _extraer_temas_docx(doc_redes)
+  informativos = _deduplicar_temas(informativos_redes)
+  if not informativos:
+    return
+
+  parrafos = doc_base.paragraphs
+  indice_info = next(
+      (
+          i for i, p in enumerate(parrafos)
+          if _titulo_seccion_temas_docx(p.text) == "INFORMATIVOS"
+      ),
+      None,
+  )
+  indice_neg = next(
+      (
+          i for i, p in enumerate(parrafos)
+          if _titulo_seccion_temas_docx(p.text) == "NEGATIVOS"
+      ),
+      None,
+  )
+  if indice_info is None or indice_neg is None or indice_info >= indice_neg:
+    return
+
+  espacios = parrafos[indice_info + 1:indice_neg]
+  if not espacios:
+    return
+  modelo_tema = next(
+      (p for p in espacios if _texto_normalizado_docx(p.text)),
+      parrafos[indice_info],
+  )
+  for numero, tema in enumerate(informativos, 1):
+    texto_tema = f"{numero}. {tema}"
+    if numero <= len(espacios):
+      _establecer_tema_en_elemento(
+          espacios[numero - 1]._p, texto_tema, modelo_tema
+      )
+      continue
+    clon = deepcopy(modelo_tema._p)
+    _establecer_tema_en_elemento(clon, texto_tema, modelo_tema)
+    parrafos[indice_neg]._p.addprevious(clon)
+
+  for parrafo in espacios[len(informativos):]:
+    texto = _texto_normalizado_docx(parrafo.text)
+    if re.fullmatch(r"\d+\s*[.)]?\s*-?", texto):
+      _reemplazar_texto_con_formato(parrafo, "")
+
+
 def _reconstruir_resumen_negativo_unificado(doc_base, doc_redes):
   """Integra en la plantilla los temas negativos de ambos reportes."""
   _, negativos_base = _extraer_temas_docx(doc_base)
@@ -2682,23 +2755,22 @@ def _reconstruir_resumen_negativo_unificado(doc_base, doc_redes):
   indice_info = next(
       (
           i for i, p in enumerate(parrafos)
-          if quitar_acentos(_texto_normalizado_docx(p.text)).upper()
-          == "TEMAS RELEVANTES INFORMATIVOS"
+          if _titulo_seccion_temas_docx(p.text) == "INFORMATIVOS"
       ),
       None,
   )
   indice_neg = next(
       (
           i for i, p in enumerate(parrafos)
-          if quitar_acentos(_texto_normalizado_docx(p.text)).upper()
-          == "TEMAS NEGATIVOS"
+          if _titulo_seccion_temas_docx(p.text) == "NEGATIVOS"
       ),
       None,
   )
   indice_desglose = _buscar_indice_desglose(doc_base)
-  if None in (indice_info, indice_neg, indice_desglose):
+  if indice_neg is None or indice_desglose is None:
     raise ValueError(
-        "La plantilla no contiene las secciones de resumen necesarias."
+        "La plantilla no contiene el encabezado de temas negativos o la"
+        " sección DESGLOSE."
     )
 
   modelo_tema = next(
@@ -2709,13 +2781,16 @@ def _reconstruir_resumen_negativo_unificado(doc_base, doc_redes):
       None,
   )
   if modelo_tema is None:
-    modelo_tema = next(
-        (
-            p for p in parrafos[indice_info + 1:indice_neg]
-            if _texto_normalizado_docx(p.text)
-        ),
-        parrafos[indice_neg],
-    )
+    if indice_info is not None:
+      modelo_tema = next(
+          (
+              p for p in parrafos[indice_info + 1:indice_neg]
+              if _texto_normalizado_docx(p.text)
+          ),
+          parrafos[indice_neg],
+      )
+    else:
+      modelo_tema = parrafos[indice_neg]
 
   espacios = parrafos[indice_neg + 1:indice_desglose]
   for numero, tema in enumerate(negativos, 1):
@@ -2747,8 +2822,7 @@ def _reconstruir_resumen_unificado(doc_base, doc_tradicional):
       (
           i
           for i, p in enumerate(parrafos)
-          if quitar_acentos(_texto_normalizado_docx(p.text)).upper()
-          == "TEMAS RELEVANTES INFORMATIVOS"
+          if _titulo_seccion_temas_docx(p.text) == "INFORMATIVOS"
       ),
       None,
   )
@@ -2756,8 +2830,7 @@ def _reconstruir_resumen_unificado(doc_base, doc_tradicional):
       (
           i
           for i, p in enumerate(parrafos)
-          if quitar_acentos(_texto_normalizado_docx(p.text)).upper()
-          == "TEMAS NEGATIVOS"
+          if _titulo_seccion_temas_docx(p.text) == "NEGATIVOS"
       ),
       None,
   )
@@ -3120,6 +3193,7 @@ def unificar_reportes_word(archivo_tradicional, archivo_redes):
   _actualizar_totales_unificados(doc_base, metricas)
   # El periodo de medición de la portada pertenece a la plantilla tradicional
   # y no se reemplaza con el rango combinado.
+  _rellenar_resumen_informativo_si_vacio(doc_base, doc_redes)
   _reconstruir_resumen_negativo_unificado(doc_base, doc_redes)
   _reconstruir_desglose_unificado(
       doc_base,
