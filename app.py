@@ -2223,7 +2223,12 @@ def _actualizar_periodo_desde_fechas(doc, fechas):
         f"{inicio.day:02d} de {MESES_ES[inicio.month]} de {inicio.year} al"
         f" {fin.day:02d} de {MESES_ES[fin.month]} de {fin.year}"
     )
-  for parrafo in doc.paragraphs:
+  parrafos = list(doc.paragraphs)
+  for tabla in doc.tables:
+    for fila in tabla.rows:
+      for celda in fila.cells:
+        parrafos.extend(celda.paragraphs)
+  for parrafo in parrafos:
     if _texto_normalizado_docx(parrafo.text).upper().startswith(
         "PERIODO DE MEDICIÓN:"
     ):
@@ -2250,6 +2255,71 @@ def _actualizar_balance_unificado(doc, positiva, negativa, total):
 
 
 def _actualizar_totales_unificados(doc, metricas):
+  """Actualiza el resumen sin destruir los bloques verde y rojo del formato."""
+  parrafos = doc.paragraphs
+  indice_info = next(
+      (
+          i for i, p in enumerate(parrafos)
+          if "TOTAL NOTAS INFORMATIVAS:" in p.text.upper()
+      ),
+      None,
+  )
+  indice_neg = next(
+      (
+          i for i, p in enumerate(parrafos)
+          if "TOTAL NOTAS NEGATIVAS:" in p.text.upper()
+      ),
+      None,
+  )
+
+  # Formato editorial: un título verde y un título rojo con sus desgloses
+  # separados. Se localizan por contenido para no depender de índices fijos.
+  if indice_info is not None and indice_neg is not None:
+    _reemplazar_texto_con_formato(
+        parrafos[indice_info],
+        f"TOTAL NOTAS INFORMATIVAS: {metricas['positiva']}",
+    )
+    if indice_info + 1 < indice_neg:
+      positivos = metricas["positivos_canal"]
+      _reemplazar_texto_con_formato(
+          parrafos[indice_info + 1],
+          "\n".join([
+              f"TOTAL DE IMPACTOS: {metricas['positiva']}",
+              f"ENTREVISTAS: {positivos['ENTREVISTAS']}",
+              f"TV: {positivos['TELEVISIÓN']}",
+              f"RADIO: {positivos['RADIO']}",
+              f"PRENSA LOCAL: {positivos['PRENSA LOCAL']}",
+              f"PORTALES DIGITALES: {positivos['PORTALES DIGITALES']}",
+              f"COLUMNAS: {positivos['COLUMNAS']}",
+              f"REDES SOCIALES: {positivos['REDES SOCIALES']}",
+          ]),
+      )
+
+    _reemplazar_texto_con_formato(
+        parrafos[indice_neg],
+        f"TOTAL NOTAS NEGATIVAS: {metricas['negativa']}",
+    )
+    negativos = metricas["negativos_canal"]
+    detalles_negativos = [
+        f"TOTAL DE IMPACTOS: {metricas['negativa']}",
+        "\n".join([
+            f"ENTREVISTAS: {negativos['ENTREVISTAS']}",
+            f"TV: {negativos['TELEVISIÓN']}",
+            f"RADIO: {negativos['RADIO']}",
+            f"PRENSA LOCAL: {negativos['PRENSA LOCAL']}",
+            f"PORTALES DIGITALES: {negativos['PORTALES DIGITALES']}",
+            f"COLUMNAS: {negativos['COLUMNAS']}",
+        ]),
+        f"REDES SOCIALES: {negativos['REDES SOCIALES']}",
+    ]
+    for desplazamiento, texto in enumerate(detalles_negativos, 1):
+      indice = indice_neg + desplazamiento
+      if indice < len(parrafos):
+        _reemplazar_texto_con_formato(parrafos[indice], texto)
+        parrafos[indice].alignment = WD_ALIGN_PARAGRAPH.LEFT
+    return
+
+  # Compatibilidad con plantillas antiguas que tenían un solo bloque.
   canales_totales = {
       canal: metricas["positivos_canal"][canal]
       + metricas["negativos_canal"][canal]
@@ -2267,13 +2337,115 @@ def _actualizar_totales_unificados(doc, metricas):
       f"COLUMNAS: {canales_totales['COLUMNAS']}",
       f"REDES SOCIALES: {canales_totales['REDES SOCIALES']}",
   ]
-  for parrafo in doc.paragraphs:
-    if "TOTAL NOTAS INFORMATIVAS:" in parrafo.text.upper():
-      _reemplazar_texto_con_formato(parrafo, "\n".join(lineas))
-      return
+  if indice_info is not None:
+    _reemplazar_texto_con_formato(parrafos[indice_info], "\n".join(lineas))
+    return
   raise ValueError(
-      "El segundo archivo no contiene el bloque de totales del reporte."
+      "La plantilla no contiene el bloque de totales del reporte."
   )
+
+
+def _texto_elemento_docx(elemento):
+  return "".join(
+      nodo.text or "" for nodo in elemento.iter(qn("w:t"))
+  ).strip()
+
+
+PATRON_CANAL_BLOQUE = re.compile(
+    r"^\s*(ENTREVISTAS?|TELEVISI[ÓO]N|TV|RADIO|PRENSA(?:\s+LOCAL)?|"
+    r"PORTALES?(?:\s+(?:DIGITALES|LOCALES))?|COLUMNAS?|REDES\s+SOCIALES)"
+    r"(?:\s+(INFORMATIVAS?|NEGATIVAS?))?"
+    r"(?:\s*:\s*\(?\s*|\s+\(\s*)(\d+)",
+    re.IGNORECASE,
+)
+
+
+def _analizar_bloque_fecha(bloque):
+  """Separa un día en nodos informativos/negativos y calcula sus cifras."""
+  resultado = {
+      "informativos": [],
+      "negativos": [],
+      "total_informativos": 0,
+      "total_negativos": 0,
+      "canales_informativos": {
+          canal: 0 for canal in ORDEN_CANALES_UNIFICADOS
+      },
+      "canales_negativos": {
+          canal: 0 for canal in ORDEN_CANALES_UNIFICADOS
+      },
+  }
+  estado = "POSITIVA"
+  total_info_explicito = None
+  total_neg_explicito = None
+
+  for indice, nodo in enumerate(bloque):
+    texto = _texto_normalizado_docx(_texto_elemento_docx(nodo))
+    texto_norm = quitar_acentos(texto).upper()
+    if indice == 0 and PATRON_FECHA_REPORTE.match(texto):
+      continue
+    if texto_norm.startswith("TOTAL DE IMPACTOS INFORMATIVOS"):
+      estado = "POSITIVA"
+      valor = _extraer_entero_docx(texto.split(":", 1)[-1])
+      if valor is not None:
+        total_info_explicito = valor
+      continue
+    if (
+        texto_norm.startswith("TOTAL DE IMPACTOS NEGATIVOS")
+        or texto_norm.startswith("TOTAL NOTAS NEGATIVAS")
+        or texto_norm.startswith("NEGATIVAS:")
+    ):
+      estado = "NEGATIVA"
+      valor = _extraer_entero_docx(texto.split(":", 1)[-1])
+      if valor is not None:
+        total_neg_explicito = valor
+      continue
+
+    coincidencia = PATRON_CANAL_BLOQUE.match(texto)
+    if coincidencia:
+      canal = _canal_unificado(coincidencia.group(1))
+      modificador = quitar_acentos(coincidencia.group(2) or "").upper()
+      if modificador.startswith("NEGATIVA"):
+        estado_nodo = "NEGATIVA"
+      elif modificador.startswith("INFORMATIVA"):
+        estado_nodo = "POSITIVA"
+      else:
+        estado_nodo = estado
+      if canal:
+        clave = (
+            "canales_negativos"
+            if estado_nodo == "NEGATIVA"
+            else "canales_informativos"
+        )
+        resultado[clave][canal] += int(coincidencia.group(3))
+      destino = (
+          resultado["negativos"]
+          if estado_nodo == "NEGATIVA"
+          else resultado["informativos"]
+      )
+      destino.append(nodo)
+      continue
+
+    resultado[
+        "negativos" if estado == "NEGATIVA" else "informativos"
+    ].append(nodo)
+
+  calculado_info = sum(resultado["canales_informativos"].values())
+  calculado_neg = sum(resultado["canales_negativos"].values())
+  resultado["total_informativos"] = (
+      total_info_explicito
+      if total_info_explicito is not None
+      else calculado_info
+  )
+  resultado["total_negativos"] = (
+      total_neg_explicito
+      if total_neg_explicito is not None
+      else calculado_neg
+  )
+  return resultado
+
+
+def _es_encabezado_canal_elemento(nodo):
+  return bool(PATRON_CANAL_BLOQUE.match(_texto_elemento_docx(nodo)))
 
 
 def _reconstruir_resumen_unificado(doc_base, doc_tradicional):
@@ -2357,13 +2529,51 @@ def _reconstruir_resumen_unificado(doc_base, doc_tradicional):
 
 def _reconstruir_desglose_unificado(
     doc_base,
-    doc_tradicional,
+    doc_redes,
     bloques_tradicionales,
     bloques_redes,
 ):
   indice_desglose = _buscar_indice_desglose(doc_base)
   if indice_desglose is None:
-    raise ValueError("El segundo archivo no contiene la sección DESGLOSE.")
+    raise ValueError("La plantilla no contiene la sección DESGLOSE.")
+
+  parrafos = doc_base.paragraphs
+  modelo_fecha = next(
+      (
+          p for p in parrafos[indice_desglose + 1:]
+          if PATRON_FECHA_REPORTE.match(_texto_normalizado_docx(p.text))
+      ),
+      None,
+  )
+  modelo_total_info = next(
+      (
+          p for p in parrafos[indice_desglose + 1:]
+          if quitar_acentos(_texto_normalizado_docx(p.text)).upper().startswith(
+              "TOTAL DE IMPACTOS INFORMATIVOS"
+          )
+      ),
+      None,
+  )
+  modelo_canal = next(
+      (
+          p for p in parrafos[indice_desglose + 1:]
+          if PATRON_CANAL_BLOQUE.match(_texto_normalizado_docx(p.text))
+      ),
+      None,
+  )
+  modelo_total_neg = next(
+      (
+          p for p in parrafos[:indice_desglose]
+          if "TOTAL NOTAS NEGATIVAS:" in p.text.upper()
+      ),
+      modelo_total_info,
+  )
+  if None in (modelo_fecha, modelo_total_info, modelo_canal, modelo_total_neg):
+    raise ValueError(
+        "La plantilla no contiene los estilos de fecha, total y canal"
+        " necesarios para construir el desglose."
+    )
+
   nodo_desglose = doc_base.paragraphs[indice_desglose]._p
   cuerpo = doc_base._body._element
   elementos = list(cuerpo)
@@ -2380,29 +2590,91 @@ def _reconstruir_desglose_unificado(
   posicion = list(cuerpo).index(sect_pr) if sect_pr is not None else len(cuerpo)
 
   for fecha in fechas:
-    bloque_redes = bloques_redes.get(fecha, [])
-    bloque_trad = bloques_tradicionales.get(fecha, [])
-    origen_fecha = doc_base if bloque_redes else doc_tradicional
-    nodo_fecha = (bloque_redes or bloque_trad)[0]
+    analisis_trad = _analizar_bloque_fecha(
+        bloques_tradicionales.get(fecha, [])
+    )
+    analisis_redes = _analizar_bloque_fecha(bloques_redes.get(fecha, []))
+    total_info = (
+        analisis_trad["total_informativos"]
+        + analisis_redes["total_informativos"]
+    )
+    total_neg = (
+        analisis_trad["total_negativos"]
+        + analisis_redes["total_negativos"]
+    )
+
+    cuerpo.insert(posicion, _clonar_parrafo_con_texto(modelo_fecha, fecha))
+    posicion += 1
     cuerpo.insert(
         posicion,
-        _copiar_elemento_con_relaciones(nodo_fecha, origen_fecha, doc_base),
+        _clonar_parrafo_con_texto(
+            modelo_total_info,
+            f"TOTAL DE IMPACTOS INFORMATIVOS: {total_info}",
+        ),
     )
     posicion += 1
 
     # Orden institucional: medios tradicionales primero y redes al final.
-    for nodo in bloque_trad[1:]:
-      cuerpo.insert(
-          posicion,
-          _copiar_elemento_con_relaciones(
-              nodo, doc_tradicional, doc_base
-          ),
-      )
-      posicion += 1
-    for nodo in bloque_redes[1:]:
+    for nodo in analisis_trad["informativos"]:
       cuerpo.insert(
           posicion,
           _copiar_elemento_con_relaciones(nodo, doc_base, doc_base),
+      )
+      posicion += 1
+
+    total_redes_info = analisis_redes["canales_informativos"][
+        "REDES SOCIALES"
+    ]
+    if total_redes_info:
+      cuerpo.insert(
+          posicion,
+          _clonar_parrafo_con_texto(
+              modelo_canal, f"REDES SOCIALES: ({total_redes_info})"
+          ),
+      )
+      posicion += 1
+    for nodo in analisis_redes["informativos"]:
+      if _es_encabezado_canal_elemento(nodo):
+        continue
+      cuerpo.insert(
+          posicion,
+          _copiar_elemento_con_relaciones(nodo, doc_redes, doc_base),
+      )
+      posicion += 1
+
+    # El total negativo se imprime siempre, incluso si es cero, para que cada
+    # fecha quede completa y sea auditable.
+    cuerpo.insert(
+        posicion,
+        _clonar_parrafo_con_texto(
+            modelo_total_neg,
+            f"TOTAL DE IMPACTOS NEGATIVOS: {total_neg}",
+        ),
+    )
+    posicion += 1
+
+    for nodo in analisis_trad["negativos"]:
+      cuerpo.insert(
+          posicion,
+          _copiar_elemento_con_relaciones(nodo, doc_base, doc_base),
+      )
+      posicion += 1
+
+    total_redes_neg = analisis_redes["total_negativos"]
+    if total_redes_neg:
+      cuerpo.insert(
+          posicion,
+          _clonar_parrafo_con_texto(
+              modelo_canal, f"REDES SOCIALES: ({total_redes_neg})"
+          ),
+      )
+      posicion += 1
+    for nodo in analisis_redes["negativos"]:
+      if _es_encabezado_canal_elemento(nodo):
+        continue
+      cuerpo.insert(
+          posicion,
+          _copiar_elemento_con_relaciones(nodo, doc_redes, doc_base),
       )
       posicion += 1
 
@@ -2457,22 +2729,22 @@ def unificar_reportes_word(archivo_tradicional, archivo_redes):
   """
   Genera un tercer Word unificado.
 
-  El archivo de redes sociales es la plantilla: conserva sus estilos, tamaño de
-  página, márgenes, encabezados, pies, tabla, colores e imágenes. Del archivo
-  tradicional se incorporan cifras, temas y desglose; las fechas se ordenan.
+  El archivo tradicional es la plantilla visual: conserva sus estilos, tamaño
+  de página, márgenes, encabezados, pies, tabla, colores e imágenes. Del archivo
+  de redes se incorporan cifras y publicaciones; las fechas se ordenan.
   """
-  doc_tradicional = _abrir_docx_desde_streamlit(archivo_tradicional)
-  doc_base = _abrir_docx_desde_streamlit(archivo_redes)
+  doc_base = _abrir_docx_desde_streamlit(archivo_tradicional)
+  doc_redes = _abrir_docx_desde_streamlit(archivo_redes)
 
-  actor_tradicional = _obtener_actor_reporte_docx(doc_tradicional)
-  actor_redes = _obtener_actor_reporte_docx(doc_base)
+  actor_tradicional = _obtener_actor_reporte_docx(doc_base)
+  actor_redes = _obtener_actor_reporte_docx(doc_redes)
   if not _actores_compatibles_docx(actor_tradicional, actor_redes):
     raise ValueError(
         "Los dos archivos parecen corresponder a actores políticos distintos."
     )
 
-  bloques_tradicionales = _extraer_bloques_por_fecha(doc_tradicional)
-  bloques_redes = _extraer_bloques_por_fecha(doc_base)
+  bloques_tradicionales = _extraer_bloques_por_fecha(doc_base)
+  bloques_redes = _extraer_bloques_por_fecha(doc_redes)
   if not bloques_tradicionales or not bloques_redes:
     raise ValueError(
         "Cada archivo debe contener la sección DESGLOSE con al menos una fecha."
@@ -2484,9 +2756,9 @@ def unificar_reportes_word(archivo_tradicional, archivo_redes):
     )
 
   metricas_trad = _obtener_metricas_docx(
-      doc_tradicional, es_reporte_redes=False
+      doc_base, es_reporte_redes=False
   )
-  metricas_redes = _obtener_metricas_docx(doc_base, es_reporte_redes=True)
+  metricas_redes = _obtener_metricas_docx(doc_redes, es_reporte_redes=True)
   metricas = {
       "positiva": metricas_trad["positiva"] + metricas_redes["positiva"],
       "negativa": metricas_trad["negativa"] + metricas_redes["negativa"],
@@ -2513,10 +2785,10 @@ def unificar_reportes_word(archivo_tradicional, archivo_redes):
   _actualizar_periodo_desde_fechas(
       doc_base, set(bloques_tradicionales) | set(bloques_redes)
   )
-  _reconstruir_resumen_unificado(doc_base, doc_tradicional)
+  # Los temas editoriales de la plantilla se conservan sin remaquetarlos.
   _reconstruir_desglose_unificado(
       doc_base,
-      doc_tradicional,
+      doc_redes,
       bloques_tradicionales,
       bloques_redes,
   )
@@ -2722,21 +2994,22 @@ else:
   st.subheader("🔗 Unificar dos reportes Word")
   st.info(
       "Sube primero el reporte de medios tradicionales y después el reporte de"
-      " redes sociales. El segundo archivo se utilizará como plantilla para"
+      " redes sociales. El primer archivo se utilizará como plantilla para"
       " conservar su formato, estilos, colores, tabla, imágenes, encabezados y"
-      " pies de página."
+      " pies de página. El desglose incluirá los totales informativos y"
+      " negativos de cada día."
   )
 
   col_trad, col_redes = st.columns(2)
   with col_trad:
     reporte_tradicional = st.file_uploader(
-        "1. Reporte Word de medios tradicionales",
+        "1. Reporte Word de medios tradicionales (plantilla visual)",
         type=["docx"],
         key="reporte_tradicional_unificar",
     )
   with col_redes:
     reporte_redes = st.file_uploader(
-        "2. Reporte Word de redes sociales (plantilla visual)",
+        "2. Reporte Word de redes sociales",
         type=["docx"],
         key="reporte_redes_unificar",
     )
@@ -2759,7 +3032,7 @@ else:
           )
           st.success(
               "El tercer reporte quedó unificado y conserva como base el"
-              " formato del archivo de redes sociales."
+              " formato del archivo de medios tradicionales."
           )
         except Exception as e:
           st.session_state.pop("reporte_word_unificado", None)
