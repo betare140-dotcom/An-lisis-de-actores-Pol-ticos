@@ -3283,10 +3283,11 @@ elif tipo_analisis == (
           if df_h is None or df_h.empty:
             continue
 
-          if "Menu" in df_h.columns and len(df_h["Menu"].dropna()) > 0:
-            nombre_raw = str(df_h["Menu"].dropna().iloc[0]).strip()
-          else:
-            nombre_raw = h_name
+          # En medios tradicionales, la hoja es la fuente de verdad.
+          # No usar la columna "Menu" para decidir el candidato: algunos
+          # archivos la conservan con el nombre de otro actor y eso mezcla las
+          # publicaciones de pestañas distintas.
+          nombre_raw = str(h_name).strip()
 
           candidato_canon = normalizar_nombre_candidato(nombre_raw)
 
