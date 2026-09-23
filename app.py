@@ -1650,6 +1650,105 @@ def crear_doc_desde_hoja(df_hoja, nombre_hoja, es_redes_sociales):
       "REDES SOCIALES",
   ]
 
+  # En REDES SOCIALES el desglose ya no se separa por fecha.
+  # Se muestran primero todas las publicaciones positivas/informativas y,
+  # al final, todas las negativas. La fecha se conserva solo internamente
+  # para calcular el periodo y mantener un orden cronológico estable.
+  if es_redes_sociales:
+    pos_df = df_filtrado[
+        df_filtrado["sentimiento_final"].isin(["POSITIVA", "NEUTRA"])
+    ].sort_values(by="fecha_dt", ascending=True)
+    neg_df = df_filtrado[
+        df_filtrado["sentimiento_final"] == "NEGATIVA"
+    ].sort_values(by="fecha_dt", ascending=True)
+
+    def agregar_publicacion_redes(row):
+      autor = obtener_campo(
+          row,
+          ["Autor", "Author name", "Fuente", "Media name", "Programa"],
+      )
+      handle = obtener_campo(
+          row, ["Author handle (@username)", "Handle", "Username"]
+      )
+      detalle = obtener_campo(
+          row,
+          [
+              "Contenido",
+              "Detail",
+              "Summary",
+              "Síntesis",
+              "Sintesis",
+              "Titulo",
+              "Título",
+              "Title",
+              "Encabezado",
+          ],
+      )
+      link = obtener_link_inteligente(row)
+
+      p_a = doc.add_paragraph()
+      p_a.paragraph_format.space_before = Pt(4)
+      p_a.paragraph_format.space_after = Pt(1)
+      if handle and not handle.startswith("@"):
+        handle = f"@{handle}"
+      add_run_verdana(
+          p_a,
+          f"{autor} {handle}".strip() if handle else autor,
+          bold=True,
+          size_pt=10,
+      )
+
+      p_d = doc.add_paragraph()
+      p_d.paragraph_format.space_after = Pt(2)
+      add_run_verdana(
+          p_d, limpiar_texto(detalle), bold=False, size_pt=9.5
+      )
+
+      if link:
+        p_l = doc.add_paragraph()
+        p_l.paragraph_format.space_after = Pt(6)
+        add_run_verdana(
+            p_l,
+            link,
+            bold=False,
+            size_pt=9,
+            color_rgb=RGBColor(0, 102, 204),
+            underline=True,
+        )
+
+    if len(pos_df) > 0:
+      p_m = doc.add_paragraph()
+      p_m.paragraph_format.space_before = Pt(4)
+      p_m.paragraph_format.space_after = Pt(4)
+      add_run_verdana(
+          p_m,
+          f"REDES SOCIALES: {len(pos_df)}",
+          bold=True,
+          size_pt=10,
+      )
+      for _, row in pos_df.iterrows():
+        agregar_publicacion_redes(row)
+
+    if len(neg_df) > 0:
+      p_neg_hdr = doc.add_paragraph()
+      p_neg_hdr.paragraph_format.space_before = Pt(10)
+      p_neg_hdr.paragraph_format.space_after = Pt(4)
+      add_run_verdana(
+          p_neg_hdr,
+          f"NEGATIVAS: {len(neg_df)}",
+          bold=True,
+          size_pt=10,
+          color_rgb=RGBColor(180, 0, 0),
+      )
+      for _, row in neg_df.iterrows():
+        agregar_publicacion_redes(row)
+
+    buffer = io.BytesIO()
+    aplicar_verdana_12_documento(doc)
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
+
   for fecha_dt_val, sub_df in df_filtrado.groupby("fecha_dt", sort=True):
     fecha_item = fecha_dt_val.strftime("%d.%m.%y")
 
@@ -2244,6 +2343,19 @@ def _extraer_bloques_por_fecha(doc):
     elif fecha_actual is not None:
       bloques[fecha_actual].append(parrafo._p)
   return bloques
+
+
+def _extraer_bloque_desglose_sin_fecha(doc):
+  """Devuelve todos los párrafos posteriores a DESGLOSE cuando no hay fechas."""
+  indice_desglose = _buscar_indice_desglose(doc)
+  if indice_desglose is None:
+    raise ValueError("El archivo no contiene la sección DESGLOSE.")
+
+  return [
+      parrafo._p
+      for parrafo in doc.paragraphs[indice_desglose + 1:]
+      if _texto_normalizado_docx(parrafo.text)
+  ]
 
 
 def _fecha_desde_etiqueta(etiqueta):
@@ -2893,6 +3005,7 @@ def _reconstruir_desglose_unificado(
     doc_redes,
     bloques_tradicionales,
     bloques_redes,
+    bloque_redes_sin_fecha=None,
 ):
   indice_desglose = _buscar_indice_desglose(doc_base)
   if indice_desglose is None:
@@ -3054,6 +3167,57 @@ def _reconstruir_desglose_unificado(
       )
       posicion += 1
 
+  # Compatibilidad con el nuevo reporte de redes SIN encabezados de fecha.
+  # Las publicaciones informativas/positivas se agregan juntas primero y las
+  # negativas juntas al final, sin crear una fecha artificial.
+  if bloque_redes_sin_fecha:
+    analisis_redes_global = _analizar_bloque_fecha(bloque_redes_sin_fecha)
+    total_redes_info = analisis_redes_global["total_informativos"]
+    total_redes_neg = analisis_redes_global["total_negativos"]
+
+    if total_redes_info:
+      cuerpo.insert(
+          posicion,
+          _clonar_parrafo_con_texto(
+              modelo_canal, f"REDES SOCIALES: ({total_redes_info})"
+          ),
+      )
+      posicion += 1
+
+    for nodo in analisis_redes_global["informativos"]:
+      if _es_encabezado_canal_elemento(nodo):
+        continue
+      cuerpo.insert(
+          posicion,
+          _copiar_elemento_con_relaciones(nodo, doc_redes, doc_base),
+      )
+      posicion += 1
+
+    if total_redes_neg:
+      cuerpo.insert(
+          posicion,
+          _clonar_parrafo_con_texto(
+              modelo_total_neg, f"NEGATIVAS: {total_redes_neg}"
+          ),
+      )
+      posicion += 1
+      cuerpo.insert(
+          posicion,
+          _clonar_parrafo_con_texto(
+              modelo_canal, f"REDES SOCIALES: ({total_redes_neg})"
+          ),
+      )
+      posicion += 1
+
+    for nodo in analisis_redes_global["negativos"]:
+      if _es_encabezado_canal_elemento(nodo):
+        continue
+      cuerpo.insert(
+          posicion,
+          _copiar_elemento_con_relaciones(nodo, doc_redes, doc_base),
+      )
+      posicion += 1
+
 
 def _obtener_actor_reporte_docx(doc):
   """Obtiene una etiqueta breve del actor para evitar mezclas accidentales."""
@@ -3145,7 +3309,8 @@ def unificar_reportes_word(archivo_tradicional, archivo_redes):
   El archivo tradicional es la plantilla visual: conserva sus estilos, tamaño
   de página, márgenes, encabezados, pies, tabla, colores e imágenes. Del archivo
   de redes se incorporan cifras y publicaciones. El periodo y los encabezados
-  de fecha del archivo tradicional se conservan sin cambios.
+  de fecha del archivo tradicional se conservan sin cambios. El reporte de
+  redes puede venir con el nuevo formato sin fechas.
   """
   doc_base = _abrir_docx_desde_streamlit(archivo_tradicional)
   doc_redes = _abrir_docx_desde_streamlit(archivo_redes)
@@ -3153,15 +3318,19 @@ def unificar_reportes_word(archivo_tradicional, archivo_redes):
 
   bloques_tradicionales = _extraer_bloques_por_fecha(doc_base)
   bloques_redes = _extraer_bloques_por_fecha(doc_redes)
+  bloque_redes_sin_fecha = None
+  if not bloques_redes:
+    bloque_redes_sin_fecha = _extraer_bloque_desglose_sin_fecha(doc_redes)
+
   if not bloques_tradicionales:
     raise ValueError(
         "El primer archivo debe contener la sección DESGLOSE con al menos una"
         " fecha para funcionar como plantilla."
     )
-  if not bloques_redes:
+  if not bloques_redes and not bloque_redes_sin_fecha:
     raise ValueError(
-        "El segundo archivo no contiene publicaciones fechadas dentro de la"
-        " sección DESGLOSE."
+        "El segundo archivo no contiene publicaciones dentro de la sección"
+        " DESGLOSE."
     )
 
   metricas_trad = _obtener_metricas_docx(
@@ -3200,6 +3369,7 @@ def unificar_reportes_word(archivo_tradicional, archivo_redes):
       doc_redes,
       bloques_tradicionales,
       bloques_redes,
+      bloque_redes_sin_fecha=bloque_redes_sin_fecha,
   )
 
   salida = io.BytesIO()
@@ -3407,10 +3577,10 @@ else:
       "Sube primero el reporte de medios tradicionales y después el reporte de"
       " redes sociales. El primer archivo se utilizará como plantilla para"
       " conservar su formato, estilos, colores, tabla, imágenes, encabezados y"
-      " pies de página. El desglose incluirá los totales informativos y"
-      " negativos de cada día. Las fechas de ambos archivos se unirán aunque"
-      " no coincidan entre sí, pero el periodo y las fechas del primer archivo"
-      " no se modificarán. Todo el documento se generará en Verdana 12."
+      " pies de página. Las fechas del primer archivo se conservarán sin"
+      " cambios. Las publicaciones de redes sociales pueden venir sin fechas:"
+      " se integrarán primero las informativas/positivas y después las"
+      " negativas. Todo el documento se generará en Verdana 12."
   )
 
   col_trad, col_redes = st.columns(2)
@@ -3434,7 +3604,7 @@ else:
         use_container_width=True,
     ):
       with st.spinner(
-          "Sumando cifras y ordenando tradicionales y redes por fecha..."
+          "Sumando cifras e integrando las publicaciones de redes..."
       ):
         try:
           reporte_unificado = unificar_reportes_word(
